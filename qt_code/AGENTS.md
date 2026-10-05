@@ -43,7 +43,7 @@ mingw32-make clean
 │
 ├── core/
 │   ├── ProtocolConstants.h    # 所有协议常量：MODBUS REG 地址、TABLE 分配、事件 ID、运动指令 ID
-│   ├── ControllerInfoTypes.h  # 控制器信息类型：状态快照、传感器 TABLE 配置与批量数据
+│   ├── ControllerInfoTypes.h  # 控制器信息类型：状态快照、传感器与机器人状态 TABLE 配置与批量数据
 │   └── Result.h               # 通用结果类型 (ok, code, message)，附带静态工厂方法
 │
 ├── zmotion/
@@ -71,7 +71,7 @@ mingw32-make clean
 │
 ├── worker/
 │   ├── TrajectorySendWorker.h / .cpp  # 后台 Worker（QThread），阻塞式轨迹下发，支持取消/暂停
-│   └── ControllerInfoWorker.h / .cpp  # 后台 Worker（QThread），双 QTimer 周期读取状态和传感器数据
+│   └── ControllerInfoWorker.h / .cpp  # 后台 Worker（QThread），三 QTimer 周期读取状态、传感器与机器人状态数据
 │
 ├── third_party/zaux/          # ZMotion SDK 二进制文件
 │   ├── zaux.h / zmotion.h     # C API 头文件
@@ -131,6 +131,7 @@ mingw32-make clean
 | 笛卡尔点动 | 350–384 | 70–79 | Cart Jog，5 条环形缓冲 |
 | 轨迹指令 | 1000–7999 | 50–69 | Trace，10 组 × 100 条 = 1000 条缓冲 |
 | 传感器数据 | 8000+ | 120–122 | 传感器 TABLE 环形缓冲（预留，128 帧 × 12 通道） |
+| 状态监控区 | 21000–33289 | — | 机器人状态 TABLE 环形缓冲（header 2 float + 512 帧 × 24 通道） |
 | 系统状态 | — | 5 | 系统状态寄存器 (kRegSystemState) |
 | 运动模式 | — | 6 | 运动模式寄存器 (kRegMotionMode) |
 | 事件 Level 0 | — | 90 | 最高优先级（Estop、ErrorReset） |
@@ -182,7 +183,7 @@ kSysError (18)   kSysEstop (19)
    - 预填充前 prefillGroups 组（环形缓冲）
    - 写 kEventTraj 事件 → 控制器开始执行
    - 循环：等待缓冲区可用 → 读文件 → 写 TABLE → 标记 kDataUpdate
-   - 等待缓冲区期间（waitBufferReady，1ms 轮询状态寄存器）每 500ms 检查一次系统状态，控制器进入 kSysError / kSysEstop 时中止下发（错误码 3417）
+   - 等待缓冲区期间（waitBufferReady，10ms 轮询状态寄存器，避免占满共享以太网链路饿死状态监控）每 500ms 检查一次系统状态，控制器进入 kSysError / kSysEstop 时中止下发（错误码 3417）
 4. 支持暂停（pause，保留下发进度）和取消（cancel）
 
 ### 4. Ctrl Trace（轨迹控制，闭环控制）
@@ -200,7 +201,7 @@ MainWindow (UI: label_system_state)
   ↓ 连接信号槽
 ControllerInfoService (管理 QThread 生命周期)
   ↓ 创建并管理
-ControllerInfoWorker (独立 QThread，双 QTimer)
+ControllerInfoWorker (独立 QThread，三 QTimer)
   ↓ 调用
 ControllerInfoProtocol (系统状态读取 + TABLE 批量读取)
   ↓ 调用
@@ -216,6 +217,15 @@ ZMotionDriver (getTable / readModbusReg / readModbusRegs)
 3. `label_system_state` 显示：`ServoReady(2)`、`Ready(4)`、`Running(5)` 等
 4. 断开连接前 `ControllerInfoService::stopAll()` 停止所有定时器并退出线程
 5. 断开后 `label_system_state` 显示 `Disconnected`
+
+### 状态数据监控
+
+控制器每 5 个伺服周期（1kHz 总线 → 200Hz）把一帧 24 通道状态数据写入 TABLE[21000+] 环形缓冲：TABLE[21000..21001] 为 header（frame_counter 单调递增，0 表示总线初始化未完成、尚未采样），TABLE[21002+] 为帧区（512 帧 × 24 通道，帧号 f 的环形位置 = (f-1) % 512，200Hz 下覆盖 2.56s）。帧内通道：[0-4] dL 支链伸缩量(um)、[5-9] 电机编码器(脉冲)、[10-14] 电机扭矩(‰)、[15-19] 末端位姿 x,y,z(um),phi,theta(角秒)、[20] ee_valid、[21-23] 预留。
+
+1. 连接成功后自动启动（`ControllerInfoService::startStatusMonitor()`），周期 100 ms（`kStatusUploadIntervalMs`）
+2. Worker 通过 `statusTimer_` 触发 `pollStatusOnce()` → Protocol 的 `readStatusBatch()` 按帧号增量批量读取（首次只取最新一帧；环形区被覆盖时置 `overflow` 并统计 `droppedFrames`）
+3. UI 只显示最新一帧：`label_dL_J1..5`、`label_motor_encoder1..5`、`label_motor_torque1..5`、`label_ee_x/y/z/phi/theta`；`eeValid` 为假时末端 5 个 label 显示 `-`；phi/theta 由角秒 ÷3600 转为度显示
+4. 断开连接时 20 个 label 全部复位为 `-`
 
 ### 传感器 TABLE 上传（预留，默认不启动）
 
@@ -261,6 +271,7 @@ Result 中的 code 字段按模块范围分配：
   - 3300–3303: TrajectoryService
   - 3402–3420: TraceProtocol
   - 3501–3520: CartJogProtocol
+  - 3601–3603: ControllerInfoProtocol（readStatusBatch 状态批量读取）
   - 3701–3709: CommandProtocol / MotionService
   - 3801–3813: CommandProtocol / MotionService（Robot Mode，其中 3810–3813 为进出 Robot Mode 的状态校验与回读确认）
 

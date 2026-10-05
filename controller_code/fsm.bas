@@ -142,6 +142,8 @@ SUB Handle_SYS_HOMING(cur_event)
         ' 注: 此事件由 home_robot() 任务完成后写入 MODBUS_REG
         '     home_robot() 需要在函数末尾写入:
         '     MODBUS_REG(REG_EVENT_BEGIN + 1) = EVENT_HOME_DONE
+        ' 回零后 dL 采样基准重新置零
+        DL_BASE_CAPTURE()
         motion_mode = MODE_IDLE
         active_task = -1
         system_state = SYS_READY
@@ -198,6 +200,8 @@ SUB Handle_SYS_READY(cur_event)
     ELSEIF cur_event = EVENT_ROBOT_IN THEN
         ' 进入机器人模式，允许笛卡尔空间运动
 		ROBOT_MODE()
+        ' CONNFRAME 建立后虚轴 6-10 有效，末端位姿可采样
+        ee_valid = 1
         system_state = SYS_ROBOT_MODE
         PRINT "[FSM] 进入机器人模式，状态: SYS_READY -> SYS_ROBOT_MODE"
 
@@ -288,6 +292,8 @@ SUB Handle_SYS_ROBOT_MODE(cur_event)
         ' 退出机器人模式，回到伺服就绪态
 		RAPIDSTOP
         CANCEL  ' 用来退出机械手模式，CANCEL(0)才能完整退出机械手模式
+        ' 虚轴 6-10 已无效，末端位姿停止采样
+        ee_valid = 0
         system_state = SYS_SERVO_READY
         PRINT "[FSM] 退出机器人模式，状态: SYS_ROBOT_MODE -> SYS_SERVO_READY"
 
@@ -384,6 +390,8 @@ SUB Handle_SYS_RUNNING(cur_event)
     ELSEIF cur_event = EVENT_HOME_DONE THEN
         ' 回零任务在 RUNNING 期间完成（回零自身是运动）
         STOPTASK TASK_HOEM
+        ' 回零后 dL 采样基准重新置零
+        DL_BASE_CAPTURE()
         motion_mode = MODE_IDLE
         active_task = -1
         system_state = SYS_READY

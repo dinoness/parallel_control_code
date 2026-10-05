@@ -26,6 +26,20 @@ GLOBAL SUB GLOBAL_DEF()
     GLOBAL CONST TABLE_CART_CMD_BEGIN = 350
     GLOBAL CONST TABLE_DRIVER_STATUE   = 999
 
+    ' 状态监控环形区（status_mgr.bas 伺服周期采样，上位机 0.1s 批量读取）
+    ' 每帧通道布局（STATUS_CHANNELS=24）：
+    '   [0-4]  支链伸缩量 dL(um)，MPOS 相对 dl_base 基准
+    '   [5-9]  电机编码器原始脉冲 ENCODER
+    '   [10-14] 电机扭矩 DRIVE_TORQUE（0x6077，千分比 ‰）
+    '   [15-19] 末端位姿 x,y,z,phi,theta（DPOS(6..10)，仅机器人模式有效）
+    '   [20]   ee_valid 标志（1=末端位姿有效，0=无效）
+    '   [21-23] 预留
+    GLOBAL CONST TABLE_STATUS_BASE   = 21000  ' 状态监控环形区 TABLE 基址
+    GLOBAL CONST STATUS_HEADER_FLOATS = 2     ' header：frame_counter + write_index
+    GLOBAL CONST STATUS_RING_FRAMES  = 512    ' 环形帧数（200Hz 采样下覆盖 2.56s，为 0.1s 上传窗口留足链路争抢余量）
+    GLOBAL CONST STATUS_CHANNELS     = 24     ' 每帧通道数
+    GLOBAL CONST STATUS_SAMPLE_DIV   = 2      ' 采样分频：每 2 个伺服周期写一帧（1kHz 总线 → 200Hz），降低上传数据量
+
 
     ' ======================================================
     ' Protocol Para
@@ -110,6 +124,7 @@ GLOBAL SUB GLOBAL_DEF()
     GLOBAL CONST TASK_CATR_JOG      = 3
     GLOBAL CONST TASK_TRAJ          = 4
     GLOBAL CONST TASK_CTRL_MOVE     = 5
+    GLOBAL CONST TASK_STATUS        = 6  ' 状态采样 INT_CYCLE 周期任务号
 
 
     ' error code
@@ -126,6 +141,13 @@ GLOBAL SUB GLOBAL_DEF()
 
     ' other config para
     GLOBAL CONST MAX_EVENT_LEVEL = 3
+	
+	' 采集相关数据
+	GLOBAL dl_base(5)            ' 各实轴 dL 零位基准（回零后重新标定）
+	GLOBAL ee_valid              ' 末端位姿有效标志（1=机器人模式已建立，DPOS(6..10)可读）
+	GLOBAL status_frame_counter  ' 已写入的总帧数（单调递增）
+	GLOBAL status_write_index    ' 下一帧写入位置（0..STATUS_RING_FRAMES-1，环形）
+	GLOBAL status_tick           ' 采样分频计数器（每 STATUS_SAMPLE_DIV 个伺服周期写一帧）
 
 END SUB
 

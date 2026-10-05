@@ -6,10 +6,12 @@ ControllerInfoWorker::ControllerInfoWorker(ControllerInfoProtocol* protocol,
     : QObject(parent),
       protocol_(protocol),
       stateTimer_(new QTimer(this)),
-      sensorTimer_(new QTimer(this))
+      sensorTimer_(new QTimer(this)),
+      statusTimer_(new QTimer(this))
 {
     stateTimer_->setSingleShot(false);
     sensorTimer_->setSingleShot(false);
+    statusTimer_->setSingleShot(false);
 }
 
 void ControllerInfoWorker::startStateMonitor(int intervalMs)
@@ -69,6 +71,35 @@ void ControllerInfoWorker::stopSensorUpload()
     }
 }
 
+void ControllerInfoWorker::startStatusMonitor(int intervalMs)
+{
+    if (protocol_ == nullptr) return;
+
+    lastStatusFrameCounter_ = 0;
+
+    // 立即读取一次状态数据
+    pollStatusOnce();
+
+    statusTimer_->setInterval(intervalMs);
+    connect(statusTimer_, &QTimer::timeout,
+            this, &ControllerInfoWorker::pollStatusOnce,
+            Qt::UniqueConnection);
+
+    if (!statusTimer_->isActive()) {
+        statusTimer_->start();
+    }
+}
+
+void ControllerInfoWorker::stopStatusMonitor()
+{
+    lastStatusFrameCounter_ = 0;
+
+    if (statusTimer_->isActive()) {
+        statusTimer_->stop();
+        statusTimer_->disconnect(this);
+    }
+}
+
 void ControllerInfoWorker::pollStateOnce()
 {
     if (protocol_ == nullptr) return;
@@ -101,5 +132,22 @@ void ControllerInfoWorker::pollSensorOnce()
 
     if (!batch.frames.isEmpty()) {
         emit sensorBatchReceived(batch);
+    }
+}
+
+void ControllerInfoWorker::pollStatusOnce()
+{
+    if (protocol_ == nullptr) return;
+
+    StatusTableBatch batch;
+    Result ret = protocol_->readStatusBatch(lastStatusFrameCounter_, batch);
+
+    if (!ret.ok) {
+        emit monitorError(ret);
+        return;
+    }
+
+    if (!batch.frames.isEmpty()) {
+        emit statusBatchReceived(batch);
     }
 }

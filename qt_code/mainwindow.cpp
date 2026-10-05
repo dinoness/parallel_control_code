@@ -73,6 +73,10 @@ void MainWindow::Init()
                     if (!ret.ok) {
                         qDebug() << "Start state monitor failed:" << ret.message;
                     }
+                    ret = ctx_->controllerInfoService()->startStatusMonitor();
+                    if (!ret.ok) {
+                        qDebug() << "Start status monitor failed:" << ret.message;
+                    }
                 } else {
                     ctx_->controllerInfoService()->stopAll();
                     ui->label_system_state->setText("Disconnected");
@@ -85,6 +89,23 @@ void MainWindow::Init()
                     if (paused_) {
                         paused_ = false;
                         ui->btn_pause_resume->setText("PAUSE");
+                    }
+
+                    // 断线时复位机器人状态显示 label
+                    QLabel* statusLabels[20] = {
+                        ui->label_dL_J1, ui->label_dL_J2, ui->label_dL_J3,
+                        ui->label_dL_J4, ui->label_dL_J5,
+                        ui->label_motor_encoder1, ui->label_motor_encoder2,
+                        ui->label_motor_encoder3, ui->label_motor_encoder4,
+                        ui->label_motor_encoder5,
+                        ui->label_motor_torque1, ui->label_motor_torque2,
+                        ui->label_motor_torque3, ui->label_motor_torque4,
+                        ui->label_motor_torque5,
+                        ui->label_ee_x, ui->label_ee_y, ui->label_ee_z,
+                        ui->label_ee_phi, ui->label_ee_theta
+                    };
+                    for (int i = 0; i < 20; ++i) {
+                        statusLabels[i]->setText("-");
                     }
                 }
             });
@@ -116,6 +137,44 @@ void MainWindow::Init()
                 qDebug() << "Sensor batch frames:" << batch.frames.size()
                          << "overflow:" << batch.overflow
                          << "dropped:" << batch.droppedFrames;
+            });
+
+    // ── 机器人状态数据显示 ────────────────────────────
+    connect(ctx_->controllerInfoService(), &ControllerInfoService::statusBatchReceived,
+            this, [this](const StatusTableBatch& batch) {
+                // 只显示最新一帧
+                const StatusSampleFrame& frame = batch.frames.last();
+
+                QLabel* dLLabels[5] = { ui->label_dL_J1, ui->label_dL_J2, ui->label_dL_J3,
+                                        ui->label_dL_J4, ui->label_dL_J5 };
+                QLabel* encoderLabels[5] = { ui->label_motor_encoder1, ui->label_motor_encoder2,
+                                             ui->label_motor_encoder3, ui->label_motor_encoder4,
+                                             ui->label_motor_encoder5 };
+                QLabel* torqueLabels[5] = { ui->label_motor_torque1, ui->label_motor_torque2,
+                                            ui->label_motor_torque3, ui->label_motor_torque4,
+                                            ui->label_motor_torque5 };
+                QLabel* eeLabels[3] = { ui->label_ee_x, ui->label_ee_y, ui->label_ee_z };
+
+                for (int i = 0; i < 5; ++i) {
+                    dLLabels[i]->setText(QString::number(frame.dL[i], 'f', 2));
+                    encoderLabels[i]->setText(QString::number(frame.encoder[i], 'f', 0));
+                    torqueLabels[i]->setText(QString::number(frame.torque[i], 'f', 0));
+                }
+
+                if (frame.eeValid) {
+                    for (int i = 0; i < 3; ++i) {
+                        eeLabels[i]->setText(QString::number(frame.ee[i], 'f', 2));
+                    }
+                    // phi/theta 单位为角秒，UI 显示度需 ÷3600
+                    ui->label_ee_phi->setText(QString::number(frame.ee[3] / 3600.0, 'f', 4));
+                    ui->label_ee_theta->setText(QString::number(frame.ee[4] / 3600.0, 'f', 4));
+                } else {
+                    for (int i = 0; i < 3; ++i) {
+                        eeLabels[i]->setText("-");
+                    }
+                    ui->label_ee_phi->setText("-");
+                    ui->label_ee_theta->setText("-");
+                }
             });
 
     // ── 轨迹下发进度 ──────────────────────────────────

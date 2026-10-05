@@ -49,6 +49,7 @@ v2/
 ├── ethercat_mgr.bas      # EtherCAT 总线初始化（扫描、轴映射、启动）
 ├── home_mgr.bas          # 回零管理（home_robot 函数，5 轴分两组回零）
 ├── manual_joint_mgr.bas  # 单轴手动控制（通过 MODBUS 接收指令）
+├── status_mgr.bas        # 状态采样上传（INT_CYCLE 伺服周期任务，写 TABLE 环形区）
 ├── safety_mgr.bas        # 安全监控（心跳检测，独立任务，待完善）
 ├── para_config.bas       # 机器人几何参数配置（动静平台坐标、初始支链长度）
 ├── frame1000.c           # 自定义 CFRAME 1000 正逆解实现（闭环矢量法）
@@ -129,11 +130,15 @@ SYS_BOOT → SYS_BUS_INIT → SYS_SERVO_READY ⇄ SYS_HOMING → SYS_READY ⇄ S
 | TASK_CATR_JOG (3) | 笛卡尔点动 | CART_JOG_TASK()（待实现） | MODE_CART_JOG |
 | TASK_TRAJ (4) | 轨迹执行 | TRAJ_TASK() → TRAJ_MOVE() | MODE_TRAJECTORY |
 | TASK_CTRL_MOVE (5) | 闭环控制（力控微调） | CTRL_MOVE() → INT_CYCLE 周期执行 PID_MOVE() | MODE_SENSOR_CLOSED |
+| TASK_STATUS (6) | 状态采样上传 | STATUS_INIT() → INT_CYCLE 周期执行 STATUS_SAMPLE()（5 分频，200Hz） | 常驻，不占用运动模式 |
 
 任务之间互斥，同一时间只能有一个运动任务在运行。暂停/恢复通过 `PAUSETASK`/`RESUMETASK` 实现。
 注意：闭环控制不是 RUNTASK 任务，而是 `INT_CYCLE` 中断周期任务（每个 SERVO_PERIOD 执行一次 PID_MOVE），
 由 `CTRL_MOVE()` 启动、`CTRL_MOVE_END()` 停止；周期任务读到 cmd_id=0（CMD_NONE）时自行停止并写
 `EVENT_CTRL_DONE` 通知 FSM 退出闭环模式。
+状态采样（TASK_STATUS）同样是 `INT_CYCLE` 中断周期任务，由 `STATUS_INIT()` 在系统启动时注册后常驻，
+每个伺服周期执行一次 `STATUS_SAMPLE`（内部 5 分频，200Hz 写一帧），将 dL、编码器、扭矩、末端位姿写入 TABLE 环形区
+（TABLE_STATUS_BASE=21000 起，header 2 + 512 帧 × 24 通道），不参与运动任务互斥。
 
 ### 运动学系统
 
@@ -149,7 +154,7 @@ SYS_BOOT → SYS_BUS_INIT → SYS_SERVO_READY ⇄ SYS_HOMING → SYS_READY ⇄ S
 
 详见 `register_assignment.md`。
 
-- **TABLE**: 0-299 结构参数 / 300-349 单轴指令 / 350-399 点动指令 / 400-999 预留 / 1000-9999 轨迹数据
+- **TABLE**: 0-299 结构参数 / 300-349 单轴指令 / 350-399 点动指令 / 400-999 预留 / 1000-9999 轨迹数据 / 21000-33289 状态监控环形区（要求 TSIZE ≥ 33290）
 - **MODBUS_REG**: 0-49 系统状态 / 50-69 轨迹状态 / 70-79 点动状态 / 80-89 单轴状态 / 90-99 事件序列
 
 ## 开发约定
@@ -162,6 +167,9 @@ SYS_BOOT → SYS_BUS_INIT → SYS_SERVO_READY ⇄ SYS_HOMING → SYS_READY ⇄ S
 
 ### 注释语言
 代码注释和 `PRINT` 输出均为**中文**，变量名和关键字为英文。
+
+### 全局变量声明
+**非 AutoRun 文件（main.bas 以外的 .bas）顶部的文件级 `GLOBAL` 声明不会被执行**，运行时引用会报 `Array index over max` / 变量未定义。全局变量（含数组）必须声明在 `global_config.bas` 的 `GLOBAL_DEF()` 内（由 main.bas:25 调用注册），或直接声明在 main.bas 顶层（如 `cmd_pos`/`adj_pos`）。各模块文件只使用全局变量，不在本文件声明。
 
 ### 状态机模式
 新增状态时需：
@@ -208,6 +216,7 @@ SYS_BOOT → SYS_BUS_INIT → SYS_SERVO_READY ⇄ SYS_HOMING → SYS_READY ⇄ S
 - [ ] 力控闭环微调（ctrL_mgr.bas：INT_CYCLE 周期任务，与轨迹共用数据区，每伺服周期消费一条 MOVE_PTABS 指令并下发（ticks=1）；FSM 已接入 EVENT_CTRL/EVENT_CTRL_DONE，读到 cmd_id=0 自行退出；传感器读取与微调算法待实现）
 - [ ] 安全监控完整实现
 - [ ] 限位检测逻辑
+- [x] 状态采样上传（status_mgr.bas：INT_CYCLE 伺服周期任务 TASK_STATUS，5 分频（200Hz）采样 dL/编码器/扭矩/末端位姿写入 TABLE 21000-33289 环形区，header 最后写保证帧完整性；回零后经 DL_BASE_CAPTURE 重新标定 dL 基准）
 
 ## 相关文档
 

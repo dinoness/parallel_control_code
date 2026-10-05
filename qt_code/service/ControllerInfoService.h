@@ -27,14 +27,19 @@ public:
     Result startSensorUpload(const SensorTableConfig& config = SensorTableConfig());
     void stopSensorUpload();
 
+    Result startStatusMonitor(int intervalMs = kStatusUploadIntervalMs);
+    void stopStatusMonitor();
+
     void stopAll();
 
     bool isStateMonitorRunning() const;
     bool isSensorUploadRunning() const;
+    bool isStatusMonitorRunning() const;
 
 signals:
     void stateUpdated(const ControllerStateSnapshot& snapshot);
     void sensorBatchReceived(const SensorTableBatch& batch);
+    void statusBatchReceived(const StatusTableBatch& batch);
     void monitorError(Result result);
 
 private:
@@ -47,4 +52,5 @@ private:
 
     bool stateMonitorRunning_ = false;
     bool sensorUploadRunning_ = false;
+    bool statusMonitorRunning_ = false;
 };

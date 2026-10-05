@@ -245,8 +245,8 @@ Result TraceProtocol::waitBufferReady(int groupId,
             return Result::success();
         }
 
-        QThread::msleep(1);
-        ++waitedMs;
+        QThread::msleep(kTrajBufferPollIntervalMs);
+        waitedMs += kTrajBufferPollIntervalMs;
 
         // 周期性检查系统状态：Error/Estop 时缓冲不会再被消费，立即退出
         if (waitedMs % kTrajWaitStateCheckIntervalMs == 0) {

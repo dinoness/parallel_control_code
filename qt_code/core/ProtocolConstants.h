@@ -72,6 +72,11 @@ constexpr int kRegTrajStatusBase  = 50;     // 指令执行状态REG地址 (50~6
 // 等待缓冲期间检查系统状态寄存器的间隔 (ms)
 constexpr int kTrajWaitStateCheckIntervalMs = 500;
 
+// 等待缓冲时的状态寄存器轮询间隔 (ms)。
+// 所有 ZAux 调用共用一条以太网链路，1ms 轮询会占满链路、饿死状态监控等并发读取，
+// 10ms 对轨迹连续性无影响（缓冲有 10 组 × 100 点的余量）
+constexpr int kTrajBufferPollIntervalMs = 10;
+
 // ===================================================================
 // Event ID
 // ===================================================================
@@ -137,3 +142,19 @@ constexpr int kRegSensorUploadStatus = 122;
 // 上位机默认批量上传周期，不等同于控制器采样周期
 // 控制器端可以 1 ms 写一次 TABLE，上位机每 20 ms / 50 ms 批量读一次
 constexpr int kSensorDefaultUploadIntervalMs = 20;
+
+// ===================================================================
+// 机器人状态显示（状态数据 TABLE 环形缓冲）
+// ===================================================================
+
+// 控制器每 5 个伺服周期（1kHz 总线 → 200Hz）把一帧 24 通道状态数据写入 TABLE[21000+] 环形缓冲
+// TABLE[21000..21001] 为 2 个 float64 的 header：[frame_counter, write_index]
+// frame_counter 单调递增，0 表示控制器尚未开始采样（总线初始化未完成）
+// TABLE[21002+] 为帧区，512 帧 × 24 个 float，帧号 f 的环形位置 = (f-1) % 512
+// 200Hz 下 0.1s 上传窗口约 20 帧，512 帧覆盖 2.56s，为链路被轨迹下发占用时留缓冲余量
+constexpr int kStatusTableBase = 21000;
+constexpr int kStatusHeaderFloats = 2;
+constexpr int kStatusFrameBase = 21002;      // kStatusTableBase + kStatusHeaderFloats
+constexpr int kStatusChannelCount = 24;
+constexpr int kStatusRingFrameCapacity = 512;
+constexpr int kStatusUploadIntervalMs = 100;

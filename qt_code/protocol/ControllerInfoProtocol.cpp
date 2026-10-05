@@ -202,3 +202,110 @@ Result ControllerInfoProtocol::readContiguousFrames(const SensorTableConfig& con
 
     return Result::success();
 }
+
+// ===================================================================
+// 机器人状态 TABLE 批量读取
+// ===================================================================
+
+Result ControllerInfoProtocol::readStatusBatch(quint64& lastFrameCounter,
+                                               StatusTableBatch& batch)
+{
+    batch = StatusTableBatch();
+    batch.timestamp = QDateTime::currentDateTime();
+
+    if (driver_ == nullptr) {
+        return Result::fail(3601, "ZMotionDriver 未初始化");
+    }
+
+    // 1. 读取 header：[frame_counter, write_index]（2 个 float64）
+    QVector<float> header;
+    Result ret = driver_->getTable(kStatusTableBase, kStatusHeaderFloats, header);
+    if (!ret.ok) return ret;
+
+    if (header.size() < kStatusHeaderFloats) {
+        return Result::fail(3602,
+            QString("状态 header 数据不足: 期望=%1 实际=%2")
+                .arg(kStatusHeaderFloats).arg(header.size()));
+    }
+
+    // frame_counter 由 float64 转 quint64
+    quint64 fc = static_cast<quint64>(static_cast<double>(header[0]));
+
+    // 2. frame_counter=0 表示控制器尚未开始采样；无新帧时返回空 batch
+    if (fc == 0 || fc <= lastFrameCounter) {
+        return Result::success();
+    }
+
+    // 3. 计算本次读取的起止帧号
+    quint64 newest = fc;
+    quint64 oldestAvailable = (fc > static_cast<quint64>(kStatusRingFrameCapacity))
+                                  ? fc - kStatusRingFrameCapacity + 1
+                                  : 1;
+
+    quint64 start;
+    if (lastFrameCounter == 0) {
+        // 首次读取只取最新一帧
+        start = newest;
+    } else {
+        start = qMax(lastFrameCounter + 1, oldestAvailable);
+        // 环形区被覆盖，中间帧已丢失
+        if (start > lastFrameCounter + 1) {
+            batch.overflow = true;
+            batch.droppedFrames = start - (lastFrameCounter + 1);
+            qDebug() << "ControllerInfoProtocol: status overflow, dropped"
+                     << batch.droppedFrames << "frames";
+        }
+    }
+
+    // 4. start..newest 按环形位置分一到两段连续区间批量读取
+    // 帧号 f 的环形位置 = (f-1) % 容量
+    int startRing = static_cast<int>((start - 1) % kStatusRingFrameCapacity);
+    quint64 totalFrames = newest - start + 1;
+    quint64 firstSegFrames = qMin(totalFrames,
+                                  static_cast<quint64>(kStatusRingFrameCapacity - startRing));
+
+    for (int seg = 0; seg < 2; ++seg) {
+        quint64 segFrames = (seg == 0) ? firstSegFrames
+                                       : totalFrames - firstSegFrames;
+        if (segFrames == 0) break;
+
+        int segRingStart = (seg == 0) ? startRing : 0;
+        quint64 segFrameBase = (seg == 0) ? start : start + firstSegFrames;
+        int floatCount = static_cast<int>(segFrames) * kStatusChannelCount;
+
+        QVector<float> raw;
+        ret = driver_->getTable(kStatusFrameBase + segRingStart * kStatusChannelCount,
+                                floatCount, raw);
+        if (!ret.ok) return ret;
+
+        if (raw.size() < floatCount) {
+            return Result::fail(3603,
+                QString("状态帧数据不足: 期望=%1 实际=%2")
+                    .arg(floatCount).arg(raw.size()));
+        }
+
+        // 5. 逐帧解析填充 StatusSampleFrame
+        for (int i = 0; i < static_cast<int>(segFrames); ++i) {
+            const float* ch = raw.constData() + i * kStatusChannelCount;
+
+            StatusSampleFrame frame;
+            frame.frameCounter = segFrameBase + i;
+            frame.hostTimestamp = QDateTime::currentDateTime();
+
+            for (int j = 0; j < 5; ++j) {
+                frame.dL[j]      = ch[j];       // 支链伸缩量 um
+                frame.encoder[j] = ch[5 + j];   // 电机编码器 脉冲
+                frame.torque[j]  = ch[10 + j];  // 电机扭矩 千分比
+                frame.ee[j]      = ch[15 + j];  // 末端位姿 x,y,z(um), phi,theta(角秒)
+            }
+            frame.eeValid = (ch[20] > 0.5f);
+
+            batch.frames.append(frame);
+        }
+    }
+
+    // 6. 更新最后读取帧号
+    lastFrameCounter = newest;
+
+    return Result::success();
+}

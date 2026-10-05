@@ -32,6 +32,12 @@ public:
                            quint64& lastFrameCounter,
                            SensorTableBatch& batch);
 
+    /// @brief 从 TABLE[21000+] 环形缓冲批量读取机器人状态数据帧
+    /// @param lastFrameCounter 上次读取的最后帧号（0 表示首次读取，只取最新一帧），读取后更新
+    /// @param batch 输出：批量数据
+    Result readStatusBatch(quint64& lastFrameCounter,
+                           StatusTableBatch& batch);
+
     /// @brief 将系统状态值转换为可读字符串
     static QString systemStateToText(uint16_t state);
 

@@ -1,3 +1,7 @@
+' 状态监控环形区需 TABLE 至 21000+2+512*24=33290，默认 TSIZE 可能不足；
+' TSIZE 重设会清空 TABLE，必须放在最前面（任何 TABLE 使用之前）
+TSIZE = 34000
+
 DELAY(3000)  '等待驱动器设备上电完成
 PRINT "总线通讯周期：",SERVO_PERIOD,"us"
 
@@ -69,6 +73,10 @@ DEFINE_CFRAME  1000,BUS_NODE_NUM,0,0,0    'framenum, totalaxises, axises_aux,  m
 
 '' ==========  开启中断功能  ==========
 INT_ENABLE = 1
+
+' 启动状态采样周期任务（INT_CYCLE 中断，每伺服周期写入 TABLE 环形区，常驻）
+' 必须在 AXIS_CONFIG() 之后调用：dl_base 基准需在 UNITS 设置后采集，保证 dL 单位为 um
+STATUS_INIT()
 
 
 '' ==========  闭环模式变量  ==========

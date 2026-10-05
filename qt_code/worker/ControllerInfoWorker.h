@@ -10,9 +10,10 @@
 
 /// @brief 控制器信息后台 Worker — 运行在独立 QThread 中
 ///
-/// 内部使用两个 QTimer：
+/// 内部使用三个 QTimer：
 /// - stateTimer_：默认 200 ms，读取系统状态
 /// - sensorTimer_：默认不启动，调用 startSensorUpload() 后启动
+/// - statusTimer_：默认 100 ms，批量读取机器人状态 TABLE 环形缓冲
 ///
 /// 注意：控制器状态显示周期为 200 ms，属于低频监控。
 /// 传感器信号由控制器端每 1 ms 采样写入 TABLE 环形缓冲，
@@ -34,23 +35,31 @@ public slots:
     void startSensorUpload(const SensorTableConfig& config);
     void stopSensorUpload();
 
+    void startStatusMonitor(int intervalMs);
+    void stopStatusMonitor();
+
 signals:
     void stateUpdated(const ControllerStateSnapshot& snapshot);
     void sensorBatchReceived(const SensorTableBatch& batch);
+    void statusBatchReceived(const StatusTableBatch& batch);
     void monitorError(Result result);
 
 private slots:
     void pollStateOnce();
     void pollSensorOnce();
+    void pollStatusOnce();
 
 private:
     ControllerInfoProtocol* protocol_ = nullptr;
 
     QTimer* stateTimer_ = nullptr;
     QTimer* sensorTimer_ = nullptr;
+    QTimer* statusTimer_ = nullptr;
 
     SensorTableConfig sensorConfig_;
     int lastSensorReadIndex_ = 0;
     quint64 lastSensorFrameCounter_ = 0;
     bool sensorUploadRunning_ = false;
+
+    quint64 lastStatusFrameCounter_ = 0;
 };

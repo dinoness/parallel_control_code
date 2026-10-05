@@ -33,6 +33,10 @@ Result ControllerInfoService::ensureThread()
             this, &ControllerInfoService::sensorBatchReceived,
             Qt::QueuedConnection);
 
+    connect(worker_, &ControllerInfoWorker::statusBatchReceived,
+            this, &ControllerInfoService::statusBatchReceived,
+            Qt::QueuedConnection);
+
     connect(worker_, &ControllerInfoWorker::monitorError,
             this, &ControllerInfoService::monitorError,
             Qt::QueuedConnection);
@@ -139,10 +143,45 @@ void ControllerInfoService::stopSensorUpload()
     }
 }
 
+Result ControllerInfoService::startStatusMonitor(int intervalMs)
+{
+    Result ret = ensureThread();
+    if (!ret.ok) return ret;
+
+    bool invoked = QMetaObject::invokeMethod(
+        worker_,
+        [this, intervalMs]() {
+            worker_->startStatusMonitor(intervalMs);
+        },
+        Qt::QueuedConnection);
+
+    if (!invoked) {
+        return Result::fail(3104, "无法调用 Worker::startStatusMonitor");
+    }
+
+    statusMonitorRunning_ = true;
+    return Result::success();
+}
+
+void ControllerInfoService::stopStatusMonitor()
+{
+    statusMonitorRunning_ = false;
+
+    if (worker_ != nullptr) {
+        QMetaObject::invokeMethod(
+            worker_,
+            [this]() {
+                worker_->stopStatusMonitor();
+            },
+            Qt::QueuedConnection);
+    }
+}
+
 void ControllerInfoService::stopAll()
 {
     stopStateMonitor();
     stopSensorUpload();
+    stopStatusMonitor();
     cleanupThread();
 }
 
@@ -154,4 +193,9 @@ bool ControllerInfoService::isStateMonitorRunning() const
 bool ControllerInfoService::isSensorUploadRunning() const
 {
     return sensorUploadRunning_;
+}
+
+bool ControllerInfoService::isStatusMonitorRunning() const
+{
+    return statusMonitorRunning_;
 }
