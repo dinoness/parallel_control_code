@@ -4,7 +4,7 @@ GLOBAL SUB MANNUAL_JOINT()
     LOCAL cmd_start_index
     LOCAL cmd_end_index
     LOCAL cmd_id
-    LOCAL speed_level
+    LOCAL speed_mmps
     LOCAL joint_speed
     LOCAL joint_acc
     LOCAL data_state
@@ -26,19 +26,16 @@ GLOBAL SUB MANNUAL_JOINT()
 
     ' 指令信息
     cmd_id = TABLE(cmd_start_index)
-    speed_level = TABLE(cmd_end_index)
+    speed_mmps = TABLE(cmd_end_index)  ' 第7字段为速度(mm/s)
 
-    ' 设置运动级数
-    IF speed_level = SPEED_L3 THEN
-        joint_speed = JOINT_L3_SPEED
-        joint_acc = JOINT_L3_ACC
-    ELSEIF speed_level = SPEED_L2 THEN
-        joint_speed = JOINT_L2_SPEED
-        joint_acc = JOINT_L2_ACC
-    ELSE
-        joint_speed = JOINT_L1_SPEED
-        joint_acc = JOINT_L1_ACC
+    ' 速度限幅：(0, MAX_MANUAL_SPEED] mm/s，非法值按默认低速处理
+    IF speed_mmps <= 0 THEN
+        speed_mmps = 1
+    ELSEIF speed_mmps > MAX_MANUAL_SPEED THEN
+        speed_mmps = MAX_MANUAL_SPEED
     ENDIF
+    joint_speed = speed_mmps * LENGTH_UNIT
+    joint_acc = 2 * joint_speed  ' 加速度取速度的2倍
 
     speed = joint_speed, joint_speed, joint_speed, joint_speed, joint_speed
     accel = joint_acc, joint_acc, joint_acc, joint_acc, joint_acc
@@ -65,7 +62,7 @@ GLOBAL SUB CART_JOG()
     LOCAL cmd_start_index
     LOCAL cmd_end_index
     LOCAL cmd_id
-    LOCAL speed_level
+    LOCAL speed_mmps
     LOCAL joint_speed
     LOCAL joint_acc
     LOCAL data_state
@@ -81,19 +78,16 @@ GLOBAL SUB CART_JOG()
 
     ' 指令信息
     cmd_id = TABLE(cmd_start_index)
-    speed_level = TABLE(cmd_end_index)
+    speed_mmps = TABLE(cmd_end_index)  ' 第7字段为速度(mm/s)
 
-    ' 设置运动级数
-    IF speed_level = SPEED_L3 THEN
-        joint_speed = JOINT_L3_SPEED
-        joint_acc = JOINT_L3_ACC
-    ELSEIF speed_level = SPEED_L2 THEN
-        joint_speed = JOINT_L2_SPEED
-        joint_acc = JOINT_L2_ACC
-    ELSE
-        joint_speed = JOINT_L1_SPEED
-        joint_acc = JOINT_L1_ACC
+    ' 速度限幅：(0, MAX_MANUAL_SPEED] mm/s，非法值按默认低速处理
+    IF speed_mmps <= 0 THEN
+        speed_mmps = 1
+    ELSEIF speed_mmps > MAX_MANUAL_SPEED THEN
+        speed_mmps = MAX_MANUAL_SPEED
     ENDIF
+    joint_speed = speed_mmps * LENGTH_UNIT
+    joint_acc = 2 * joint_speed  ' 加速度取速度的2倍
 
     BASE(6,7,8,9,10)
     speed = joint_speed, joint_speed, joint_speed, joint_speed, joint_speed
@@ -104,12 +98,16 @@ GLOBAL SUB CART_JOG()
     ' 执行指令，此处下发位移的指令不乘系数，由上位机调整
     IF cmd_id = CMD_MOVE THEN
         MOVE(TABLE(cmd_start_index+1), TABLE(cmd_start_index+2), TABLE(cmd_start_index+3), TABLE(cmd_start_index+4), TABLE(cmd_start_index+5))
-        MODBUS_REG(REG_JOINT_CMD_STATE_ST) = F_DataUsed
+        MODBUS_REG(REG_CART_CMD_STATE_ST) = F_DataUsed
+        WAIT IDLE
+    ELSEIF cmd_id = CMD_MOVE_ABS THEN
+        MOVEABS(TABLE(cmd_start_index+1), TABLE(cmd_start_index+2), TABLE(cmd_start_index+3), TABLE(cmd_start_index+4), TABLE(cmd_start_index+5))
+        MODBUS_REG(REG_CART_CMD_STATE_ST) = F_DataUsed
         WAIT IDLE
     ELSE
         PRINT "该指令暂不支持，代号："cmd_id
     ENDIF
 
-    MODBUS_REG(REG_EVENT_L1) = EVENT_TRAJ_DONE
-    
+    MODBUS_REG(REG_EVENT_L1) = EVENT_CART_JOG_DONE
+
 END SUB

@@ -78,7 +78,7 @@ public:
     QPushButton *btn_trace_exit;
     QLabel *label_20;
     QLabel *label_motion_mode;
-    QLineEdit *ledit_cmd_id;
+    QComboBox *cbox_cmd_id;
     QLabel *label_21;
     QPushButton *btn_pause_resume;
     QPushButton *btn_stop;
@@ -87,7 +87,7 @@ public:
     QPushButton *btn_robo_mode_in;
     QLabel *label_22;
     QPushButton *btn_robo_mode_out;
-    QComboBox *cbox_speed_level;
+    QLineEdit *ledit_speed;
     QLabel *label_23;
     QPushButton *btn_ctrl_enter;
     QPushButton *btn_ctrl_exit;
@@ -300,9 +300,9 @@ public:
         label_motion_mode = new QLabel(centralwidget);
         label_motion_mode->setObjectName(QString::fromUtf8("label_motion_mode"));
         label_motion_mode->setGeometry(QRect(780, 40, 211, 19));
-        ledit_cmd_id = new QLineEdit(centralwidget);
-        ledit_cmd_id->setObjectName(QString::fromUtf8("ledit_cmd_id"));
-        ledit_cmd_id->setGeometry(QRect(310, 130, 111, 31));
+        cbox_cmd_id = new QComboBox(centralwidget);
+        cbox_cmd_id->setObjectName(QString::fromUtf8("cbox_cmd_id"));
+        cbox_cmd_id->setGeometry(QRect(310, 130, 111, 31));
         label_21 = new QLabel(centralwidget);
         label_21->setObjectName(QString::fromUtf8("label_21"));
         label_21->setGeometry(QRect(310, 100, 69, 19));
@@ -327,9 +327,9 @@ public:
         btn_robo_mode_out = new QPushButton(centralwidget);
         btn_robo_mode_out->setObjectName(QString::fromUtf8("btn_robo_mode_out"));
         btn_robo_mode_out->setGeometry(QRect(540, 130, 91, 31));
-        cbox_speed_level = new QComboBox(centralwidget);
-        cbox_speed_level->setObjectName(QString::fromUtf8("cbox_speed_level"));
-        cbox_speed_level->setGeometry(QRect(200, 130, 91, 31));
+        ledit_speed = new QLineEdit(centralwidget);
+        ledit_speed->setObjectName(QString::fromUtf8("ledit_speed"));
+        ledit_speed->setGeometry(QRect(200, 130, 91, 31));
         label_23 = new QLabel(centralwidget);
         label_23->setObjectName(QString::fromUtf8("label_23"));
         label_23->setGeometry(QRect(800, 190, 69, 31));
@@ -502,7 +502,7 @@ public:
         label_system_state->setText(QCoreApplication::translate("MainWindow", "Disconnected", nullptr));
         label_6->setText(QCoreApplication::translate("MainWindow", "Direct Joint", nullptr));
         btn_direct_joint_enter->setText(QCoreApplication::translate("MainWindow", "ENTER", nullptr));
-        label_7->setText(QCoreApplication::translate("MainWindow", "Speed Level", nullptr));
+        label_7->setText(QCoreApplication::translate("MainWindow", "Speed(mm/s)", nullptr));
         label_8->setText(QCoreApplication::translate("MainWindow", "1(um)", nullptr));
         label_9->setText(QCoreApplication::translate("MainWindow", "2(um)", nullptr));
         label_10->setText(QCoreApplication::translate("MainWindow", "3(um)", nullptr));

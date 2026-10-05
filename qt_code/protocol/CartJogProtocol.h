@@ -20,7 +20,7 @@ public:
     Result exitCartJogMode();
 
     /// @brief 下发一条 Cart Jog 指令到 TABLE[kCartJogTableStart]
-    /// @param cmd 7 个 float: [cmd, x, y, z, phi, theta, speed]
+    /// @param cmd 7 个 float: [cmd, x, y, z, phi, theta, speed(mm/s)]
     /// @note 先校验 kRegSystemState == kSysReady，
     ///       再写 TABLE、写状态、写事件
     Result sendCartJogCommand(const float cmd[kCartJogCmdSize]);

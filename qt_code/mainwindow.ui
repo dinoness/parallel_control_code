@@ -275,7 +275,7 @@
      </rect>
     </property>
     <property name="text">
-     <string>Speed Level</string>
+     <string>Speed(mm/s)</string>
     </property>
    </widget>
    <widget class="QLineEdit" name="ledit_d_j1">
@@ -651,11 +651,11 @@
      <string>None</string>
     </property>
    </widget>
-   <widget class="QLineEdit" name="ledit_cmd_id">
+   <widget class="QComboBox" name="cbox_cmd_id">
     <property name="geometry">
      <rect>
       <x>310</x>
-      <y>130</y>
+      <y>120</y>
       <width>111</width>
       <height>31</height>
      </rect>
@@ -765,7 +765,7 @@
      <string>EXIT</string>
     </property>
    </widget>
-   <widget class="QComboBox" name="cbox_speed_level">
+   <widget class="QLineEdit" name="ledit_speed">
     <property name="geometry">
      <rect>
       <x>200</x>
@@ -1371,6 +1371,16 @@
     </property>
     <property name="text">
      <string>-</string>
+    </property>
+   </widget>
+   <widget class="QComboBox" name="cbox_cmd_id">
+    <property name="geometry">
+     <rect>
+      <x>310</x>
+      <y>160</y>
+      <width>111</width>
+      <height>31</height>
+     </rect>
     </property>
    </widget>
   </widget>

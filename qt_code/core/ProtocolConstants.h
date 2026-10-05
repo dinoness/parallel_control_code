@@ -110,12 +110,11 @@ constexpr int kCmdMovePtabs = 10;
 constexpr int kCmdMoveDelay = 20;
 
 // ===================================================================
-// 运动速度等级
+// 手动运动速度（mm/s）
+// 指令第 7 字段直接携带速度值，与控制器侧 MAX_MANUAL_SPEED 对应
 // ===================================================================
 
-constexpr int kSpeedLevel1   = 1;
-constexpr int kSpeedLevel2   = 2;
-constexpr int kSpeedLevel3   = 3;
+constexpr float kMaxManualSpeedMmPs = 20.0f;
 
 // ===================================================================
 // Controller Info / Sensor TABLE Upload

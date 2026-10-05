@@ -98,11 +98,6 @@ GLOBAL SUB GLOBAL_DEF()
     GLOBAL CONST F_DataUsed       = 2
     GLOBAL CONST F_DataBlank      = 3
 
-    ' 速度等级代号
-    GLOBAL CONST SPEED_L1 = 1
-    GLOBAL CONST SPEED_L2 = 2
-    GLOBAL CONST SPEED_L3 = 3
-
     ' Mannual Joint
     GLOBAL CONST SIZE_JOINT_CMD = 7
     GLOBAL CONST SIZE_CART_CMD  = 7
@@ -194,6 +189,8 @@ GLOBAL SUB AXIS_CONFIG()
     
 
     ' 速度依然以mm作为定义
+    ' 手动运动（单轴/点动）速度由上位机以 mm/s 直接下发，此处限幅最大值
+    GLOBAL CONST MAX_MANUAL_SPEED = 20  ' 手动运动最大速度(mm/s)
     GLOBAL CONST JOINT_L1_SPEED = 1 * LENGTH_UNIT
     GLOBAL CONST JOINT_L2_SPEED = 5 * LENGTH_UNIT
     GLOBAL CONST JOINT_L3_SPEED = 10 * LENGTH_UNIT

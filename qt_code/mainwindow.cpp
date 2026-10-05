@@ -1,6 +1,7 @@
 #include "mainwindow.h"
 #include "ui_mainwindow.h"
 #include <QDebug>
+#include <QDoubleValidator>
 #include <QMessageBox>
 #include <QString>
 
@@ -54,11 +55,16 @@ void MainWindow::Init()
     ui->ledit_jog_phi->setText("0");
     ui->ledit_jog_theta->setText("0");
 
-    ui->cbox_speed_level->clear();
-    ui->cbox_speed_level->addItem("L1");
-    ui->cbox_speed_level->addItem("L2");
-    ui->cbox_speed_level->addItem("L3");
-    ui->cbox_speed_level->setCurrentIndex(1);  // 默认 L2
+    // 点动指令下拉框：显示指令名称，userData 为指令代号
+    ui->cbox_cmd_id->clear();
+    ui->cbox_cmd_id->addItem("MOVE", kCmdMove);
+    ui->cbox_cmd_id->addItem("MOVEABS", kCmdMoveAbs);
+    ui->cbox_cmd_id->setCurrentIndex(0);  // 默认 MOVE
+
+    // 速度输入框：单位 mm/s，范围 (0, kMaxManualSpeedMmPs]
+    ui->ledit_speed->setText("5");
+    ui->ledit_speed->setValidator(
+        new QDoubleValidator(0.01, kMaxManualSpeedMmPs, 2, this));
 
     updateMotionModeDisplay();
 
@@ -466,17 +472,22 @@ void MainWindow::sendDirectJointCmd()
     float j3 = ui->ledit_d_j3->text().toFloat();
     float j4 = ui->ledit_d_j4->text().toFloat();
     float j5 = ui->ledit_d_j5->text().toFloat();
-    int speedLevel = ui->cbox_speed_level->currentIndex() + 1;  // L1=1, L2=2, L3=3
+    float speed = ui->ledit_speed->text().toFloat();  // mm/s
+    if (speed <= 0.0f || speed > kMaxManualSpeedMmPs) {
+        QMessageBox::warning(this, "参数错误",
+                             QString("速度需在 (0, %1] mm/s 范围内").arg(kMaxManualSpeedMmPs));
+        return;
+    }
 
-    Result ret = ctx_->motionService()->sendDirectJoint(j1, j2, j3, j4, j5, speedLevel);
+    Result ret = ctx_->motionService()->sendDirectJoint(j1, j2, j3, j4, j5, speed);
     if (!ret.ok) {
         QMessageBox::warning(this, "下发失败", ret.message);
         return;
     }
 
     ui->statusbar->showMessage(
-        QString("Direct Joint: J1=%1 J2=%2 J3=%3 J4=%4 J5=%5 Speed=%6")
-            .arg(j1).arg(j2).arg(j3).arg(j4).arg(j5).arg(speedLevel), 3000);
+        QString("Direct Joint: J1=%1 J2=%2 J3=%3 J4=%4 J5=%5 Speed=%6mm/s")
+            .arg(j1).arg(j2).arg(j3).arg(j4).arg(j5).arg(speed), 3000);
     qDebug() << "Direct Joint command sent.";
 }
 
@@ -486,23 +497,28 @@ void MainWindow::sendDirectJointCmd()
 
 void MainWindow::sendCartJogCmd()
 {
-    int cmdId = ui->ledit_cmd_id->text().toInt();
+    int cmdId = ui->cbox_cmd_id->currentData().toInt();
     float x = ui->ledit_jog_x->text().toFloat();
     float y = ui->ledit_jog_y->text().toFloat();
     float z = ui->ledit_jog_z->text().toFloat();
     float phi = ui->ledit_jog_phi->text().toFloat();
     float theta = ui->ledit_jog_theta->text().toFloat();
-    int speedLevel = ui->cbox_speed_level->currentIndex() + 1;  // L1=1, L2=2, L3=3
+    float speed = ui->ledit_speed->text().toFloat();  // mm/s
+    if (speed <= 0.0f || speed > kMaxManualSpeedMmPs) {
+        QMessageBox::warning(this, "参数错误",
+                             QString("速度需在 (0, %1] mm/s 范围内").arg(kMaxManualSpeedMmPs));
+        return;
+    }
 
-    Result ret = ctx_->motionService()->sendCartJog(cmdId, x, y, z, phi, theta, speedLevel);
+    Result ret = ctx_->motionService()->sendCartJog(cmdId, x, y, z, phi, theta, speed);
     if (!ret.ok) {
         QMessageBox::warning(this, "下发失败", ret.message);
         return;
     }
 
     ui->statusbar->showMessage(
-        QString("Cart Jog: Cmd=%1 X=%2 Y=%3 Z=%4 Phi=%5 Theta=%6 Speed=%7")
-            .arg(cmdId).arg(x).arg(y).arg(z).arg(phi).arg(theta).arg(speedLevel), 3000);
+        QString("Cart Jog: Cmd=%1 X=%2 Y=%3 Z=%4 Phi=%5 Theta=%6 Speed=%7mm/s")
+            .arg(ui->cbox_cmd_id->currentText()).arg(x).arg(y).arg(z).arg(phi).arg(theta).arg(speed), 3000);
     qDebug() << "Cart Jog command sent.";
 }
 

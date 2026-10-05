@@ -33,13 +33,13 @@ public:
     Result enterJointMode();
     Result exitJointMode();
     Result sendDirectJoint(float j1, float j2, float j3, float j4, float j5,
-                           int speedLevel);
+                           float speedMmPs);
 
     // ── Cart Jog 模式 ─────────────────────────────────
     Result enterCartJogMode();
     Result exitCartJogMode();
     Result sendCartJog(int cmdId, float x, float y, float z, float phi,
-                       float theta, int speedLevel);
+                       float theta, float speedMmPs);
 
     // ── Trace 模式 ────────────────────────────────────
     Result enterTraceMode();

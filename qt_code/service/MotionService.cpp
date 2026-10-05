@@ -100,7 +100,7 @@ Result MotionService::exitJointMode()
 }
 
 Result MotionService::sendDirectJoint(float j1, float j2, float j3,
-                                      float j4, float j5, int speedLevel)
+                                      float j4, float j5, float speedMmPs)
 {
     float cmd[kJointCmdSize];
     cmd[0] = kCmdMove;
@@ -109,7 +109,7 @@ Result MotionService::sendDirectJoint(float j1, float j2, float j3,
     cmd[3] = j3;
     cmd[4] = j4;
     cmd[5] = j5;
-    cmd[6] = static_cast<float>(speedLevel);
+    cmd[6] = speedMmPs;
 
     return jointProtocol_.sendJointCommand(cmd);
 }
@@ -128,7 +128,7 @@ Result MotionService::exitCartJogMode()
 
 Result MotionService::sendCartJog(int cmdId,
                                   float x, float y, float z,
-                                  float phi, float theta, int speedLevel)
+                                  float phi, float theta, float speedMmPs)
 {
     float cmd[kCartJogCmdSize];
     cmd[0] = static_cast<float>(cmdId);
@@ -137,7 +137,7 @@ Result MotionService::sendCartJog(int cmdId,
     cmd[3] = z;
     cmd[4] = phi;
     cmd[5] = theta;
-    cmd[6] = static_cast<float>(speedLevel);
+    cmd[6] = speedMmPs;
 
     return cartJogProtocol_.sendCartJogCommand(cmd);
 }

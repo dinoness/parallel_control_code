@@ -20,7 +20,7 @@ public:
     Result exitJointMode();
 
     /// @brief 下发一条关节指令到 TABLE[kJointTableStart]
-    /// @param cmd 7 个 float: [cmd, j1, j2, j3, j4, j5, speed]
+    /// @param cmd 7 个 float: [cmd, j1, j2, j3, j4, j5, speed(mm/s)]
     /// @note 先校验 kRegSystemState ∈ {kSysServoReady, kSysReady}，
     ///       再写 TABLE、写状态、写事件
     Result sendJointCommand(const float cmd[kJointCmdSize]);

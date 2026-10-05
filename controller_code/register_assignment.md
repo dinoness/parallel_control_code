@@ -92,7 +92,9 @@ MODBUS_REG（位寄存器）0~7999
 #### TABLE
 0-299，机器人结构参数
 300-349，单轴运动指令数据
+  - 每条指令 7 个 float：`cmd_id, j1..j5, speed`；cmd_id 仅支持 1=MOVE（相对运动）；第 7 字段为速度（mm/s，上限 20，控制器侧限幅 MAX_MANUAL_SPEED）
 350-399，点动指令数据
+  - 每条指令 7 个 float：`cmd_id, x, y, z, phi, theta, speed`；cmd_id 支持 1=MOVE（相对直线）、2=MOVEABS（绝对直线）；第 7 字段为速度（mm/s，上限 20）
 400-999，预留
 1000-9999，轨迹数据
 21000-33289，状态监控环形区（header 2 + 512 帧 × 24 通道，status_mgr.bas 每 5 个伺服周期采样一帧，1kHz 总线 → 200Hz，上位机 0.1s 批量读取约 20 帧）

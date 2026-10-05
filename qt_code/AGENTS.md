@@ -163,13 +163,13 @@ kSysError (18)   kSysEstop (19)
 
 ### 1. Direct Joint（关节运动）
 1. UI 点击 "Enter" → MotionService::enterJointMode()
-2. 输入 J1–J5 目标值 + 速度等级
+2. 输入 J1–J5 目标值 + 速度（ledit_speed，单位 mm/s，上限 20）
 3. UI 点击 "Send" → MotionService::sendDirectJoint() → JointProtocol::sendJointCommand()
 4. JointProtocol: 校验状态 (kSysServoReady 或 kSysReady) → 写 TABLE[300] → 置 kDataUpdate → 写事件 kEventJoint
 
 ### 2. Cart Jog（笛卡尔点动）
 1. UI 点击 "Enter" → MotionService::enterCartJogMode()
-2. 输入命令 ID + X/Y/Z/Phi/Theta 增量 + 速度等级
+2. 在 cbox_cmd_id 下拉框选择指令名称（MOVE / MOVEABS，userData 为指令代号）+ 输入 X/Y/Z/Phi/Theta 增量 + 速度（ledit_speed，单位 mm/s，上限 20）
 3. UI 点击 "Send" → MotionService::sendCartJog() → CartJogProtocol::sendCartJogCommand()
 4. CartJogProtocol: 校验状态 (仅 kSysReady) → 写 TABLE[350] → 置 kDataUpdate → 写事件 kEventCartJog
 
