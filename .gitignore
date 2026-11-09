@@ -2,8 +2,12 @@ qt_code/build/
 qt_code/*.pro.user.*
 qt_code/*.pro.user
 qt_code/trace_data/
+qt_code/debug/
+qt_code/release/
 .tmp/
 
 *.zpj
 *.so
 *.pdf
+*.Debug
+*.Release

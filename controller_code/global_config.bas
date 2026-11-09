@@ -26,7 +26,7 @@ GLOBAL SUB GLOBAL_DEF()
     GLOBAL CONST TABLE_CART_CMD_BEGIN = 350
     GLOBAL CONST TABLE_DRIVER_STATUE   = 999
 
-    ' 状态监控环形区（status_mgr.bas 伺服周期采样，上位机 0.1s 批量读取）
+    ' 状态监控环形区（ctrl_mgr.bas 统一伺服周期任务采样，上位机 0.1s 批量读取）
     ' 每帧通道布局（STATUS_CHANNELS=24）：
     '   [0-4]  支链伸缩量 dL(um)，MPOS 相对 dl_base 基准
     '   [5-9]  电机编码器原始脉冲 ENCODER
@@ -118,8 +118,7 @@ GLOBAL SUB GLOBAL_DEF()
     GLOBAL CONST TASK_JOINT         = 2
     GLOBAL CONST TASK_CATR_JOG      = 3
     GLOBAL CONST TASK_TRAJ          = 4
-    GLOBAL CONST TASK_CTRL_MOVE     = 5
-    GLOBAL CONST TASK_STATUS        = 6  ' 状态采样 INT_CYCLE 周期任务号
+    GLOBAL CONST TASK_CTRL          = 5  ' 统一伺服周期任务：状态采样与闭环控制共用
 
 
     ' error code

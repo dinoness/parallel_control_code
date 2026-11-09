@@ -49,7 +49,7 @@ v2/
 ├── ethercat_mgr.bas      # EtherCAT 总线初始化（扫描、轴映射、启动）
 ├── home_mgr.bas          # 回零管理（home_robot 函数，5 轴分两组回零）
 ├── manual_joint_mgr.bas  # 单轴手动控制（通过 MODBUS 接收指令）
-├── status_mgr.bas        # 状态采样上传（INT_CYCLE 伺服周期任务，写 TABLE 环形区）
+├── ctrl_mgr.bas          # 统一伺服周期任务、状态采样上传与闭环控制
 ├── safety_mgr.bas        # 安全监控（心跳检测，独立任务，待完善）
 ├── para_config.bas       # 机器人几何参数配置（动静平台坐标、初始支链长度）
 ├── frame1000.c           # 自定义 CFRAME 1000 正逆解实现（闭环矢量法）
@@ -129,16 +129,16 @@ SYS_BOOT → SYS_BUS_INIT → SYS_SERVO_READY ⇄ SYS_HOMING → SYS_READY ⇄ S
 | TASK_JOINT (2) | 单轴手动 | JOINT_TASK() → MANNUAL_JOINT() | MODE_JOINT_MANUAL |
 | TASK_CATR_JOG (3) | 笛卡尔点动 | CART_JOG_TASK()（待实现） | MODE_CART_JOG |
 | TASK_TRAJ (4) | 轨迹执行 | TRAJ_TASK() → TRAJ_MOVE() | MODE_TRAJECTORY |
-| TASK_CTRL_MOVE (5) | 闭环控制（力控微调） | CTRL_MOVE() → INT_CYCLE 周期执行 PID_MOVE() | MODE_SENSOR_CLOSED |
-| TASK_STATUS (6) | 状态采样上传 | STATUS_INIT() → INT_CYCLE 周期执行 STATUS_SAMPLE()（5 分频，200Hz） | 常驻，不占用运动模式 |
+| TASK_CTRL (5) | 统一伺服周期任务 | STATUS_INIT() → INT_CYCLE 周期执行 SERVO_CYCLE() | 状态采样常驻；闭环对应 MODE_SENSOR_CLOSED |
 
-任务之间互斥，同一时间只能有一个运动任务在运行。暂停/恢复通过 `PAUSETASK`/`RESUMETASK` 实现。
-注意：闭环控制不是 RUNTASK 任务，而是 `INT_CYCLE` 中断周期任务（每个 SERVO_PERIOD 执行一次 PID_MOVE），
-由 `CTRL_MOVE()` 启动、`CTRL_MOVE_END()` 停止；周期任务读到 cmd_id=0（CMD_NONE）时自行停止并写
-`EVENT_CTRL_DONE` 通知 FSM 退出闭环模式。
-状态采样（TASK_STATUS）同样是 `INT_CYCLE` 中断周期任务，由 `STATUS_INIT()` 在系统启动时注册后常驻，
-每个伺服周期执行一次 `STATUS_SAMPLE`（内部 5 分频，200Hz 写一帧），将 dL、编码器、扭矩、末端位姿写入 TABLE 环形区
-（TABLE_STATUS_BASE=21000 起，header 2 + 512 帧 × 24 通道），不参与运动任务互斥。
+普通运动任务之间互斥，同一时间只能有一个运动任务在运行，暂停/恢复通过 `PAUSETASK`/`RESUMETASK` 实现。
+闭环控制不是 RUNTASK 任务，也不单独申请中断。`STATUS_INIT()` 只注册一次 TASK_CTRL 周期中断，
+`SERVO_CYCLE()` 在 ctrl_running=1 时执行 PID_MOVE，并始终执行 STATUS_SAMPLE。
+CTRL_MOVE()/CTRL_MOVE_END() 通过 ctrl_running 开关闭环分支，CTRL_MOVE_PAUSE()/CTRL_MOVE_RESUME() 负责暂停/恢复，
+不能对 TASK_CTRL 使用 PAUSETASK/RESUMETASK，否则会同时暂停状态采样。
+周期任务读到 cmd_id=0（CMD_NONE）或非法指令时关闭闭环分支，并写 `EVENT_CTRL_DONE` 通知 FSM 退出闭环模式。
+状态采样将 dL、编码器、扭矩、末端位姿写入 TABLE 环形区（TABLE_STATUS_BASE=21000 起，
+header 2 + 512 帧 × 24 通道），不参与运动任务互斥。
 
 ### 运动学系统
 
@@ -213,10 +213,10 @@ SYS_BOOT → SYS_BUS_INIT → SYS_SERVO_READY ⇄ SYS_HOMING → SYS_READY ⇄ S
 - [ ] 正解（当前为桩实现，返回固定坐标）
 - [ ] 笛卡尔点动（CART_JOG_TASK 为桩函数）
 - [x] 轨迹执行器（TRAJ_MOVE，支持 MOVE/MOVEABS/MOVE_PTABS/MOVE_DELAY，cmd_id=0 结束标记）
-- [ ] 力控闭环微调（ctrL_mgr.bas：INT_CYCLE 周期任务，与轨迹共用数据区，每伺服周期消费一条 MOVE_PTABS 指令并下发（ticks=1）；FSM 已接入 EVENT_CTRL/EVENT_CTRL_DONE，读到 cmd_id=0 自行退出；传感器读取与微调算法待实现）
+- [ ] 力控闭环微调（ctrl_mgr.bas：由统一 INT_CYCLE 的 SERVO_CYCLE 按 ctrl_running 调度，与轨迹共用数据区，每伺服周期消费一条 MOVE_PTABS 指令并下发（ticks=1）；FSM 已接入 EVENT_CTRL/EVENT_CTRL_DONE，读到 cmd_id=0 自行退出；传感器读取与微调算法待实现）
 - [ ] 安全监控完整实现
 - [ ] 限位检测逻辑
-- [x] 状态采样上传（status_mgr.bas：INT_CYCLE 伺服周期任务 TASK_STATUS，5 分频（200Hz）采样 dL/编码器/扭矩/末端位姿写入 TABLE 21000-33289 环形区，header 最后写保证帧完整性；回零后经 DL_BASE_CAPTURE 重新标定 dL 基准）
+- [x] 状态采样上传（ctrl_mgr.bas：由统一 INT_CYCLE 的 SERVO_CYCLE 常驻调用 STATUS_SAMPLE，采样 dL/编码器/扭矩/末端位姿写入 TABLE 21000-33289 环形区，header 最后写保证帧完整性；回零后经 DL_BASE_CAPTURE 重新标定 dL 基准）
 
 ## 相关文档
 

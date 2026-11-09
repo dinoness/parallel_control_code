@@ -273,10 +273,10 @@ SUB Handle_SYS_ROBOT_MODE(cur_event)
         PRINT "[FSM] 轨迹执行开始，状态: SYS_ROBOT_MODE -> SYS_RUNNING"
 
     ELSEIF cur_event = EVENT_CTRL THEN
-        ' 闭环控制（力控微调）：INT_CYCLE 周期任务，直接启动，无需 RUNTASK
+        ' 闭环控制（力控微调）：打开统一周期任务中的闭环分支，无需 RUNTASK 或新增中断
         CTRL_MOVE()
         motion_mode = MODE_SENSOR_CLOSED
-        active_task = TASK_CTRL_MOVE
+        active_task = TASK_CTRL
         system_state = SYS_RUNNING
         PRINT "[FSM] 闭环控制开始，状态: SYS_ROBOT_MODE -> SYS_RUNNING"
 
@@ -416,8 +416,12 @@ SUB Handle_SYS_RUNNING(cur_event)
         PRINT "[FSM] 运动中急停，状态: SYS_RUNNING -> SYS_ESTOP"
 
     ELSEIF cur_event = EVENT_PAUSE THEN
-        ' 暂停当前运动任务
-        PAUSETASK active_task
+        ' 闭环与其他运动共用周期任务，只能关闭闭环分支，不能暂停整个 TASK_CTRL
+        IF motion_mode = MODE_SENSOR_CLOSED THEN
+            CTRL_MOVE_PAUSE()
+        ELSE
+            PAUSETASK active_task
+        ENDIF
         PRINT "[FSM] 运动暂停，状态: SYS_RUNNING -> SYS_PAUSED"
         system_state = SYS_PAUSED
         ' motion_mode 保持不变，用于记录暂停前是什么运动类型
@@ -479,8 +483,12 @@ SUB Handle_SYS_PAUSED(cur_event)
         PRINT "[FSM] 暂停任务被停止，状态: SYS_PAUSED -> SYS_SERVO_READY"
 
     ELSEIF cur_event = EVENT_RESUME THEN
-        ' 恢复当前暂停的任务
-        RESUMETASK active_task
+        ' 闭环仅恢复软件分支，状态采样周期任务始终保持运行
+        IF motion_mode = MODE_SENSOR_CLOSED THEN
+            CTRL_MOVE_RESUME()
+        ELSE
+            RESUMETASK active_task
+        ENDIF
         system_state = SYS_RUNNING
         PRINT "[FSM] 运动恢复，状态: SYS_PAUSED -> SYS_RUNNING"
 

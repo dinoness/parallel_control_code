@@ -71,20 +71,22 @@ ROBO_PARA_CONFIG1(bus_total_axis_num)
 '' ==========  定义机械手  ==========
 DEFINE_CFRAME  1000,BUS_NODE_NUM,0,0,0    'framenum, totalaxises, axises_aux,  max_attitudes,  rotatetype
 
-'' ==========  开启中断功能  ==========
-INT_ENABLE = 1
-
-' 启动状态采样周期任务（INT_CYCLE 中断，每伺服周期写入 TABLE 环形区，常驻）
-' 必须在 AXIS_CONFIG() 之后调用：dl_base 基准需在 UNITS 设置后采集，保证 dL 单位为 um
-STATUS_INIT()
-
-
-'' ==========  闭环模式变量  ==========
+'' ==========  闭环模式变量（必须在周期中断注册前声明）  ==========
 GLOBAL cmd_pos(5)      ' 指令目标位姿，0-4: x,y,z,theta,phi
-GLOBAL adj_pos(5)      ' 力控微调偏移量（由 Force_Tune 计算，当前恒为0）
+GLOBAL adj_pos(5)      ' 力控微调偏移量（由 PID_MOVE 计算，当前恒为0）
 GLOBAL has_target      ' 已读取到有效目标标志
 GLOBAL ctrl_index      ' 下一条待读指令的 TABLE 索引
 GLOBAL traj_over       ' 轨迹结束标志（遇到 CMD_NONE 或非法指令）
+GLOBAL ctrl_running    ' 闭环软件开关：1=周期执行 PID_MOVE，0=仅执行状态采样
+
+ctrl_running = 0
+
+'' ==========  开启中断功能  ==========
+INT_ENABLE = 1
+
+' 启动统一伺服周期任务（状态采样常驻，闭环分支由 ctrl_running 控制）
+' 必须在 AXIS_CONFIG() 之后调用：dl_base 基准需在 UNITS 设置后采集，保证 dL 单位为 um
+STATUS_INIT()
 
 
 '========================================================

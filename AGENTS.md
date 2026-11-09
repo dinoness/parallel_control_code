@@ -46,7 +46,7 @@ mingw32-make
 - `global_config.bas` — 全局常量（寄存器分配、状态枚举、运动参数）
 - `fsm.bas` — 有限状态机：事件获取/分发、各状态处理函数、任务桩函数
 - `ethercat_mgr.bas` — EtherCAT 总线初始化（扫描、轴映射、启动）
-- `home_mgr.bas` / `manual_move_mgr.bas` / `traj_move_mgr.bas` / `ctrL_mgr.bas` — 回零 / 单轴手动 / 轨迹执行 / 力控闭环微调（周期中断任务）
+- `home_mgr.bas` / `manual_move_mgr.bas` / `traj_move_mgr.bas` / `ctrl_mgr.bas` — 回零 / 单轴手动 / 轨迹执行 / 力控闭环微调（周期中断任务）
 - `robo_config.bas` — 机器人几何参数（动静平台坐标、初始支链长度）
 - `safety_mgr.bas` — 安全监控（心跳检测，框架代码）
 - `frame1000.c` / `myeigen.c` / `myeigen.h` / `zmcbuildin.h` — CFRAME 运动学库及 ZMC SDK 头文件
