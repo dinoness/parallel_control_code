@@ -57,15 +57,23 @@ uint32 SOFRAME_INIT1000(struct_soZmcDisp *pzmc,  struct_soFrameStatus* pframe, T
 
     g_soframeinfo[0].LENGTH_UNIT = *(pParaList + 40);
 
-    // for(i = 0; i < 5; i++)
-    // {
-    //     g_soframeinfo[0].zero_pose[i] = *(pParaList + 41 + i);
-    // }
-    g_soframeinfo[0].zero_pose[0] = -6.959280243330 * 1000;
-    g_soframeinfo[0].zero_pose[1] = 10.121903560548 * 1000;
-    g_soframeinfo[0].zero_pose[2] = -794.378275655855 * 1000;
-    g_soframeinfo[0].zero_pose[3] = 126.566309687187 * 3600;
-    g_soframeinfo[0].zero_pose[4] = 1.266939989948 * 3600;
+    for(i = 0; i < 5; i++)
+    {
+        g_soframeinfo[0].zero_pose[i] = *(pParaList + 41 + i);
+    }
+    // 老版本
+    // g_soframeinfo[0].zero_pose[0] = -6.959280243330 * 1000;
+    // g_soframeinfo[0].zero_pose[1] = 10.121903560548 * 1000;
+    // g_soframeinfo[0].zero_pose[2] = -794.378275655855 * 1000;
+    // g_soframeinfo[0].zero_pose[3] = 126.566309687187 * 3600;
+    // g_soframeinfo[0].zero_pose[4] = 1.266939989948 * 3600;
+
+    // 新版
+    // g_soframeinfo[0].zero_pose[0] = -0.288060111112 * 1000;
+    // g_soframeinfo[0].zero_pose[1] = 15.158853955450 * 1000;
+    // g_soframeinfo[0].zero_pose[2] = -685.226503437085 * 1000;
+    // g_soframeinfo[0].zero_pose[3] = 0 * 3600;
+    // g_soframeinfo[0].zero_pose[4] = 0 * 3600;
 
 
     g_soframeinfo[0].d_bais = *(pParaList + 46);

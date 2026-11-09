@@ -2,6 +2,7 @@ qt_code/build/
 qt_code/*.pro.user.*
 qt_code/*.pro.user
 qt_code/trace_data/
+.tmp/
 
 *.zpj
 *.so
