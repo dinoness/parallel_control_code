@@ -381,11 +381,16 @@ SUB Handle_SYS_RUNNING(cur_event)
         PRINT "[FSM] 轨迹执行完成，状态: SYS_RUNNING -> SYS_ROBOT_MODE"
 
     ELSEIF cur_event = EVENT_CTRL_DONE THEN
-        ' 闭环控制结束（周期任务读到 cmd_id=0 后已自行停止，此处仅切换状态）
+        ' 正常结束回机器人模式；力控/指令异常已由 CTRL_ABORT 停止运动，进入错误态
         motion_mode = MODE_IDLE
         active_task = -1
-        system_state = SYS_ROBOT_MODE
-        PRINT "[FSM] 闭环控制完成，状态: SYS_RUNNING -> SYS_ROBOT_MODE"
+        IF MODBUS_REG(REG_CMD_ERROR) = ERR_OK THEN
+            system_state = SYS_ROBOT_MODE
+            PRINT "[FSM] CTRL 混合轨迹完成，状态: SYS_RUNNING -> SYS_ROBOT_MODE"
+        ELSE
+            system_state = SYS_ERROR
+            PRINT "[FSM] CTRL 混合轨迹异常，状态: SYS_RUNNING -> SYS_ERROR"
+        ENDIF
 
     ELSEIF cur_event = EVENT_HOME_DONE THEN
         ' 回零任务在 RUNNING 期间完成（回零自身是运动）
@@ -493,7 +498,10 @@ SUB Handle_SYS_PAUSED(cur_event)
         PRINT "[FSM] 运动恢复，状态: SYS_PAUSED -> SYS_RUNNING"
 
     ELSEIF cur_event = EVENT_ESTOP THEN
-        ' 急停
+        ' 急停：暂停态也要关闭 CTRL 软件分支，防止复位后残留运行标志
+        IF motion_mode = MODE_SENSOR_CLOSED THEN
+            CTRL_MOVE_END()
+        ENDIF
         ' 调用外部函数: enter_estop()
         ' CALL enter_estop()
         system_state = SYS_ESTOP

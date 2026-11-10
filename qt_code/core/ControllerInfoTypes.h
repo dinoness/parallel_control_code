@@ -52,11 +52,12 @@ struct SensorTableBatch
     QDateTime timestamp;
 };
 
-/// @brief 单帧机器人状态数据（控制器每伺服周期写入 TABLE[21002+] 环形缓冲）
+/// @brief 单帧机器人状态数据（控制器以 100Hz 写入 TABLE[21002+] 环形缓冲）
 ///
-/// 帧内 24 通道：[0-4] dL支链伸缩量(um) [5-9] 电机编码器(脉冲)
+/// 帧内 32 通道：[0-4] dL支链伸缩量(um) [5-9] 电机编码器(脉冲)
 /// [10-14] 电机扭矩(‰) [15-19] 末端位姿 x,y,z(um),phi,theta(角秒)
-/// [20] ee_valid(1.0/0.0) [21-23] 预留
+/// [20] ee_valid [21-26] 六轴力/力矩原始值 [27] 滤波法向力(N)
+/// [28] 斜坡后的目标力(N) [29] Z修正量(um) [30] 力控模式 [31] 传感器状态
 struct StatusSampleFrame
 {
     quint64 frameCounter = 0;
@@ -65,6 +66,12 @@ struct StatusSampleFrame
     float encoder[5] = {0};   // 电机编码器 脉冲
     float torque[5] = {0};    // 电机扭矩 千分比
     float ee[5] = {0};        // 末端位姿 x,y,z(um), phi,theta(角秒)
+    float forceRaw[6] = {0};  // Fx,Fy,Fz,Mx,My,Mz 原始值
+    float forceNormal = 0.0f; // 滤波后的法向力 N
+    float forceTarget = 0.0f; // 经斜坡限制后的目标力 N
+    float forceAdjustment = 0.0f; // Z 方向力控修正量 um
+    int forceState = 0;       // 0=关闭 1=接触搜索 2=恒力保持 3=故障
+    int forceSensorStatus = 0; // 0=禁用 1=有效 2=无效 3=断流 4=过力
     QDateTime hostTimestamp;
 };
 

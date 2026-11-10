@@ -17,6 +17,29 @@ struct TrajectoryPoint {
     TrajectoryPoint()
         : cmd(0), x(0), y(0), z(0), theta(0), phi(0), ticks(0) {}
 
+    // CTRL 力控段配置。mode 取 kForceModeSearch / kForceModeHold；
+    // 普通坐标字段在此记录中按协议复用为力控参数。
+    static TrajectoryPoint forceConfig(int mode,
+                                       float targetForceN,
+                                       float contactThresholdN,
+                                       float rampRateNPerSec,
+                                       float maxAdjustUm) {
+        TrajectoryPoint p;
+        p.cmd = kCmdForceCfg;
+        p.x = static_cast<float>(mode);
+        p.y = targetForceN;
+        p.z = contactThresholdN;
+        p.theta = rampRateNPerSec;
+        p.phi = maxAdjustUm;
+        return p;
+    }
+
+    static TrajectoryPoint forceOff() {
+        TrajectoryPoint p;
+        p.cmd = kCmdForceOff;
+        return p;
+    }
+
     void toArray(float arr[kTrajCmdSize]) const {
         arr[0] = cmd;
         arr[1] = x;

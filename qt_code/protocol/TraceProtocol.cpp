@@ -98,7 +98,9 @@ Result TraceProtocol::sendTrajectory(const QString& datFilePath,
         return ret;
     }
 
-    int totalGroups = (totalPoints + kTrajGroupSize - 1) / kTrajGroupSize;
+    // 始终额外附加 CMD_NONE；即使文件点数恰好为 100 的整数倍也有结束组。
+    // .dat 文件本身只保存运动/段控制记录，不需要手工添加结束标记。
+    int totalGroups = (totalPoints + kTrajGroupSize) / kTrajGroupSize;
     int prefillGroups = qMin(kTrajGroupNum, totalGroups);
     int loopNum = 0;
     float blockData[kTrajBlockSize];
@@ -113,14 +115,14 @@ Result TraceProtocol::sendTrajectory(const QString& datFilePath,
                 for (int j = 0; j < kTrajCmdSize; ++j) {
                     in >> dest[j];
                     if (in.status() != QDataStream::Ok) {
-                        dest[0] = kCmdMove;
+                        dest[0] = kCmdNone;
                         for (int k = 1; k < kTrajCmdSize; ++k) dest[k] = 0;
                         in.resetStatus();
                         break;
                     }
                 }
             } else {
-                dest[0] = kCmdMove;
+                dest[0] = kCmdNone;
                 for (int k = 1; k < kTrajCmdSize; ++k) dest[k] = 0;
             }
         }

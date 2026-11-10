@@ -95,20 +95,31 @@ MODBUS_REG（位寄存器）0~7999
   - 每条指令 7 个 float：`cmd_id, j1..j5, speed`；cmd_id 仅支持 1=MOVE（相对运动）；第 7 字段为速度（mm/s，上限 20，控制器侧限幅 MAX_MANUAL_SPEED）
 350-399，点动指令数据
   - 每条指令 7 个 float：`cmd_id, x, y, z, phi, theta, speed`；cmd_id 支持 1=MOVE（相对直线）、2=MOVEABS（绝对直线）；第 7 字段为速度（mm/s，上限 20）
-400-999，预留
+400-419，力传感器适配与法向力控参数（详见 `global_config.bas` 的 `FORCE_CFG_*` 偏移）
+  - 400=硬件适配启用，401=数据有效，402=单调递增采样序号，403-408=六轴原始值
+  - 409=标度，410=零位，411=滤波系数，412-413=PI 增益，414=过力阈值
+  - 415=修正量硬限幅，416=修正速度限幅，417=接触判定周期数，418=Z 修正方向，419=断流周期阈值
+  - 默认硬件适配关闭、PI 增益为 0；硬件层必须每伺服周期更新采样序号，禁止在周期中断中执行阻塞式通信
+420-999，预留
 1000-9999，轨迹数据
-21000-33289，状态监控环形区（header 2 + 512 帧 × 24 通道，ctrl_mgr.bas 每 5 个伺服周期采样一帧，1kHz 总线 → 200Hz，上位机 0.1s 批量读取约 20 帧）
-  - 512 帧在 200Hz 下覆盖 2.56s，为上传链路被轨迹下发占用时留足缓冲余量
+21000-33289，状态监控环形区（header 2 + 384 帧 × 32 通道，ctrl_mgr.bas 分 10 个伺服周期写入一帧，1kHz 总线 → 100Hz，上位机 0.1s 批量读取约 10 帧）
+  - 384 帧在 100Hz 下覆盖 3.84s；与旧 512×24 布局占用相同 TABLE 空间
   - 要求 TSIZE ≥ 33290（main.bas 初始化最前面已设置 TSIZE = 34000）
   - header：TABLE(21000)=frame_counter，TABLE(21001)=write_index（下一帧写入位置）
-  - 每帧布局：[0-4] dL(um) / [5-9] 编码器脉冲 / [10-14] 扭矩(‰) / [15-19] 末端 x,y,z,phi,theta / [20] ee_valid / [21-23] 预留
+  - 每帧布局：[0-4] dL(um) / [5-9] 编码器脉冲 / [10-14] 扭矩(‰) / [15-19] 末端 x,y,z,phi,theta / [20] ee_valid
+  - [21-26] 六轴力/力矩原始值 / [27] 滤波法向力(N) / [28] 斜坡后目标力(N) / [29] Z 修正量(um) / [30] 力控模式 / [31] 传感器状态
 
 轨迹数据区（1000-9999）布局：
 - 10 个指令组，每组 100 条指令，每条 7 个数（一组占 700 个 TABLE 位置）
-- 每条指令：`cmd_id, x, y, z, theta, phi, ticks/blank`
-- cmd_id：1=MOVE（相对直线）、2=MOVEABS（绝对直线）、10=MOVE_PTABS（单位时间绝对，第 7 字段为 ticks）、20=MOVE_DELAY（缓冲延时，第 7 字段为延时毫秒数 ms）、0=轨迹结束标记
+- 每条指令：`cmd_id, p1, p2, p3, p4, p5, p7`
+- 普通运动：1=MOVE、2=MOVEABS、9=MOVE_PT、10=MOVE_PTABS、20=MOVE_DELAY；PT 第 7 字段为 ticks，DELAY 第 7 字段为毫秒
+- 30=FORCE_CFG：`[30, mode, target_N, contact_N, ramp_N_s, max_adjust_um, reserved]`；mode=1 接触搜索，mode=2 恒力保持
+- 31=FORCE_OFF：结束当前力控段；0=CMD_NONE：结束整条轨迹
 - 第 g 组起始地址 = 1000 + g × 700；组状态寄存器为 MODBUS_REG(50 + g)
-- **闭环控制（ctrl_mgr.bas）与轨迹执行共用本数据区及组状态寄存器**：闭环模式仅消费 cmd_id=10（MOVE_PTABS，每伺服周期消费一条并下发，ticks 固定为 1，指令第 7 字段不使用）和 cmd_id=0（结束标记）
+- 普通 TRAJ 不接受 FORCE_CFG/FORCE_OFF；完整混合加工文件使用 EVENT_CTRL，由 `CTRL_TRACE_STEP()` 作为唯一 TABLE 消费者
+- CTRL 普通段支持全部普通运动指令；FORCE_CFG 后等待普通运动完成，力控段只接受 PT/PTABS、FORCE_CFG、FORCE_OFF
+- 力控段内部统一转换为 ticks=1 的绝对 PT 目标 `nominal_pos + adj_pos`；CMD_NONE 前必须 FORCE_OFF，最后等待所有轴 IDLE 才上报完成
+- 上位机发送器自动附加 CMD_NONE，.dat 文件不需要手工填写结束记录
 
 #### MODEBUS_REG
 0-49，系统状态指示

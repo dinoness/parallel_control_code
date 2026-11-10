@@ -299,6 +299,14 @@ Result ControllerInfoProtocol::readStatusBatch(quint64& lastFrameCounter,
                 frame.ee[j]      = ch[15 + j];  // 末端位姿 x,y,z(um), phi,theta(角秒)
             }
             frame.eeValid = (ch[20] > 0.5f);
+            for (int j = 0; j < 6; ++j) {
+                frame.forceRaw[j] = ch[21 + j];
+            }
+            frame.forceNormal = ch[27];
+            frame.forceTarget = ch[28];
+            frame.forceAdjustment = ch[29];
+            frame.forceState = static_cast<int>(ch[30]);
+            frame.forceSensorStatus = static_cast<int>(ch[31]);
 
             batch.frames.append(frame);
         }

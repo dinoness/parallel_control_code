@@ -132,13 +132,13 @@ SYS_BOOT → SYS_BUS_INIT → SYS_SERVO_READY ⇄ SYS_HOMING → SYS_READY ⇄ S
 | TASK_CTRL (5) | 统一伺服周期任务 | STATUS_INIT() → INT_CYCLE 周期执行 SERVO_CYCLE() | 状态采样常驻；闭环对应 MODE_SENSOR_CLOSED |
 
 普通运动任务之间互斥，同一时间只能有一个运动任务在运行，暂停/恢复通过 `PAUSETASK`/`RESUMETASK` 实现。
-闭环控制不是 RUNTASK 任务，也不单独申请中断。`STATUS_INIT()` 只注册一次 TASK_CTRL 周期中断，
-`SERVO_CYCLE()` 在 ctrl_running=1 时执行 PID_MOVE，并始终执行 STATUS_SAMPLE。
-CTRL_MOVE()/CTRL_MOVE_END() 通过 ctrl_running 开关闭环分支，CTRL_MOVE_PAUSE()/CTRL_MOVE_RESUME() 负责暂停/恢复，
-不能对 TASK_CTRL 使用 PAUSETASK/RESUMETASK，否则会同时暂停状态采样。
-周期任务读到 cmd_id=0（CMD_NONE）或非法指令时关闭闭环分支，并写 `EVENT_CTRL_DONE` 通知 FSM 退出闭环模式。
-状态采样将 dL、编码器、扭矩、末端位姿写入 TABLE 环形区（TABLE_STATUS_BASE=21000 起，
-header 2 + 512 帧 × 24 通道），不参与运动任务互斥。
+CTRL 混合轨迹不是 RUNTASK 任务，也不单独申请中断。`STATUS_INIT()` 只注册一次 TASK_CTRL 周期中断，
+`SERVO_CYCLE()` 每周期先执行 FORCE_SAMPLE，在 ctrl_running=1 且未暂停时执行 CTRL_TRACE_STEP，最后始终执行 STATUS_SAMPLE。
+CTRL_MOVE() 启动完整混合轨迹；普通 MOVE/MOVEABS/PT/DELAY 与力控段均由 CTRL_TRACE_STEP 消费，不与 TRAJ_MOVE 同时运行。
+FORCE_CFG/FORCE_OFF 显式划分力控段，阶段切换通过非阻塞 IDLE 检查；CMD_NONE 等待所有运动结束后才写 EVENT_CTRL_DONE。
+CTRL_MOVE_PAUSE()/CTRL_MOVE_RESUME() 同时使用 MOVE_PAUSE/MOVE_RESUME 暂停运动缓冲，不能对 TASK_CTRL 使用 PAUSETASK/RESUMETASK。
+力传感器通过 TABLE 400-419 适配，默认关闭且 PI 增益为 0；当前仅进行 Z 法向增量式 PI，具备接触搜索、目标力斜坡、断流/过力保护。
+状态采样写入 TABLE 环形区（TABLE_STATUS_BASE=21000 起，header 2 + 384 帧 × 32 通道），包含六轴原始力、法向力、目标力、Z 修正量和传感器状态。
 
 ### 运动学系统
 
@@ -154,7 +154,7 @@ header 2 + 512 帧 × 24 通道），不参与运动任务互斥。
 
 详见 `register_assignment.md`。
 
-- **TABLE**: 0-299 结构参数 / 300-349 单轴指令 / 350-399 点动指令 / 400-999 预留 / 1000-9999 轨迹数据 / 21000-33289 状态监控环形区（要求 TSIZE ≥ 33290）
+- **TABLE**: 0-299 结构参数 / 300-349 单轴指令 / 350-399 点动指令 / 400-419 力传感器与力控参数 / 420-999 预留 / 1000-9999 轨迹数据 / 21000-33289 状态监控环形区（384 帧 × 32 通道，要求 TSIZE ≥ 33290）
 - **MODBUS_REG**: 0-49 系统状态 / 50-69 轨迹状态 / 70-79 点动状态 / 80-89 单轴状态 / 90-99 事件序列
 
 ## 开发约定
@@ -169,7 +169,7 @@ header 2 + 512 帧 × 24 通道），不参与运动任务互斥。
 代码注释和 `PRINT` 输出均为**中文**，变量名和关键字为英文。
 
 ### 全局变量声明
-**非 AutoRun 文件（main.bas 以外的 .bas）顶部的文件级 `GLOBAL` 声明不会被执行**，运行时引用会报 `Array index over max` / 变量未定义。全局变量（含数组）必须声明在 `global_config.bas` 的 `GLOBAL_DEF()` 内（由 main.bas:25 调用注册），或直接声明在 main.bas 顶层（如 `cmd_pos`/`adj_pos`）。各模块文件只使用全局变量，不在本文件声明。
+**非 AutoRun 文件（main.bas 以外的 .bas）顶部的文件级 `GLOBAL` 声明不会被执行**，运行时引用会报 `Array index over max` / 变量未定义。全局变量（含数组）必须声明在 `global_config.bas` 的 `GLOBAL_DEF()` 内（由 main.bas:25 调用注册），或直接声明在 main.bas 顶层（如 `nominal_pos`/`adj_pos`）。各模块文件只使用全局变量，不在本文件声明。
 
 ### 状态机模式
 新增状态时需：
@@ -212,11 +212,11 @@ header 2 + 512 帧 × 24 通道），不参与运动任务互斥。
 - [x] 逆解（闭环矢量法，frame1000.c）
 - [ ] 正解（当前为桩实现，返回固定坐标）
 - [ ] 笛卡尔点动（CART_JOG_TASK 为桩函数）
-- [x] 轨迹执行器（TRAJ_MOVE，支持 MOVE/MOVEABS/MOVE_PTABS/MOVE_DELAY，cmd_id=0 结束标记）
-- [ ] 力控闭环微调（ctrl_mgr.bas：由统一 INT_CYCLE 的 SERVO_CYCLE 按 ctrl_running 调度，与轨迹共用数据区，每伺服周期消费一条 MOVE_PTABS 指令并下发（ticks=1）；FSM 已接入 EVENT_CTRL/EVENT_CTRL_DONE，读到 cmd_id=0 自行退出；传感器读取与微调算法待实现）
+- [x] 轨迹执行器（TRAJ_MOVE，支持 MOVE/MOVEABS/MOVE_PT/MOVE_PTABS/MOVE_DELAY，cmd_id=0 结束标记）
+- [ ] CTRL 混合轨迹与力控（代码框架已实现：普通段与 FORCE_CFG/FORCE_OFF 力控段统一消费，Z 法向增量式 PI、接触搜索、目标力斜坡、断流/过力保护；实际传感器硬件适配和增益整定待完成，默认传感器关闭且增益为 0）
 - [ ] 安全监控完整实现
 - [ ] 限位检测逻辑
-- [x] 状态采样上传（ctrl_mgr.bas：由统一 INT_CYCLE 的 SERVO_CYCLE 常驻调用 STATUS_SAMPLE，采样 dL/编码器/扭矩/末端位姿写入 TABLE 21000-33289 环形区，header 最后写保证帧完整性；回零后经 DL_BASE_CAPTURE 重新标定 dL 基准）
+- [x] 状态采样上传（ctrl_mgr.bas：统一 INT_CYCLE 常驻采样，384 帧 × 32 通道写入 TABLE 21000-33289，包含机器人状态与力控数据，header 最后写保证帧完整性）
 
 ## 相关文档
 

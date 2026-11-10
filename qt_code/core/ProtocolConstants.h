@@ -93,21 +93,29 @@ constexpr int kEventCtrl        = 9;
 constexpr int kEventCtrlDone    = 10;
 constexpr int kEventRobotIn     = 21;
 constexpr int kEventRobotOut    = 22;
-constexpr int kEventStop        = 80;
-constexpr int kEventPause       = 81;
-constexpr int kEventResume      = 82;
+constexpr int kEventStop        = 81;
+constexpr int kEventPause       = 82;
+constexpr int kEventResume      = 83;
 constexpr int kEventErrorReset  = 90;
 constexpr int kEventEstop       = 99;
 
 // ===================================================================
-// 运动指令ID
+// 运动指令ID（与 controller_code/global_config.bas 同步）
 // ===================================================================
 
-constexpr int kCmdNone   = 0;
-constexpr int kCmdMove   = 1;
-constexpr int kCmdMoveAbs = 2;
+constexpr int kCmdNone      = 0;
+constexpr int kCmdMove      = 1;
+constexpr int kCmdMoveAbs   = 2;
+constexpr int kCmdMovePt    = 9;
 constexpr int kCmdMovePtabs = 10;
 constexpr int kCmdMoveDelay = 20;
+
+// CTRL 混合轨迹的段控制指令，记录仍为 7 个 float：
+// FORCE_CFG = [30, mode, target_N, contact_N, ramp_N_s, max_adjust_um, reserved]
+constexpr int kCmdForceCfg  = 30;
+constexpr int kCmdForceOff  = 31;
+constexpr int kForceModeSearch = 1;
+constexpr int kForceModeHold   = 2;
 
 // ===================================================================
 // 手动运动速度（mm/s）
@@ -146,14 +154,14 @@ constexpr int kSensorDefaultUploadIntervalMs = 20;
 // 机器人状态显示（状态数据 TABLE 环形缓冲）
 // ===================================================================
 
-// 控制器每 5 个伺服周期（1kHz 总线 → 200Hz）把一帧 24 通道状态数据写入 TABLE[21000+] 环形缓冲
+// 控制器分 10 个伺服周期（1kHz 总线 → 100Hz）写入一帧 32 通道状态数据
 // TABLE[21000..21001] 为 2 个 float64 的 header：[frame_counter, write_index]
 // frame_counter 单调递增，0 表示控制器尚未开始采样（总线初始化未完成）
-// TABLE[21002+] 为帧区，512 帧 × 24 个 float，帧号 f 的环形位置 = (f-1) % 512
-// 200Hz 下 0.1s 上传窗口约 20 帧，512 帧覆盖 2.56s，为链路被轨迹下发占用时留缓冲余量
+// TABLE[21002+] 为帧区，384 帧 × 32 个 float，帧号 f 的环形位置 = (f-1) % 384
+// 100Hz 下覆盖 3.84s；与旧 512×24 布局具有相同的 TABLE 总占用
 constexpr int kStatusTableBase = 21000;
 constexpr int kStatusHeaderFloats = 2;
 constexpr int kStatusFrameBase = 21002;      // kStatusTableBase + kStatusHeaderFloats
-constexpr int kStatusChannelCount = 24;
-constexpr int kStatusRingFrameCapacity = 512;
+constexpr int kStatusChannelCount = 32;
+constexpr int kStatusRingFrameCapacity = 384;
 constexpr int kStatusUploadIntervalMs = 100;

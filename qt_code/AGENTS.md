@@ -129,9 +129,10 @@ mingw32-make clean
 |------|------------|------------|------|
 | 关节指令 | 300–334 | 80–89 | Direct Joint，5 条环形缓冲 |
 | 笛卡尔点动 | 350–384 | 70–79 | Cart Jog，5 条环形缓冲 |
+| 力控配置 | 400–419 | — | 传感器适配、标定滤波、PI 与安全限幅 |
 | 轨迹指令 | 1000–7999 | 50–69 | Trace，10 组 × 100 条 = 1000 条缓冲 |
-| 传感器数据 | 8000+ | 120–122 | 传感器 TABLE 环形缓冲（预留，128 帧 × 12 通道） |
-| 状态监控区 | 21000–33289 | — | 机器人状态 TABLE 环形缓冲（header 2 float + 512 帧 × 24 通道） |
+| 传感器数据 | 8000+ | 120–122 | 独立传感器 TABLE 环形缓冲（预留） |
+| 状态监控区 | 21000–33289 | — | 机器人与力控状态（header 2 float + 384 帧 × 32 通道） |
 | 系统状态 | — | 5 | 系统状态寄存器 (kRegSystemState) |
 | 运动模式 | — | 6 | 运动模式寄存器 (kRegMotionMode) |
 | 事件 Level 0 | — | 90 | 最高优先级（Estop、ErrorReset） |
@@ -186,11 +187,13 @@ kSysError (18)   kSysEstop (19)
    - 等待缓冲区期间（waitBufferReady，10ms 轮询状态寄存器，避免占满共享以太网链路饿死状态监控）每 500ms 检查一次系统状态，控制器进入 kSysError / kSysEstop 时中止下发（错误码 3417）
 4. 支持暂停（pause，保留下发进度）和取消（cancel）
 
-### 4. Ctrl Trace（轨迹控制，闭环控制）
-1. UI: 进入 Ctrl Trace 模式（`MotionMode::CtrlTrace`，同样要求已进入 Robot Mode）→ 点击 "Thread Open"（与 Trace 共用下发线程及 `traceThreadOpened_` 状态）→ 点击 SEND
+### 4. Ctrl Trace（混合轨迹与力控）
+1. UI: 进入 Ctrl Trace 模式（`MotionMode::CtrlTrace`，同样要求已进入 Robot Mode）→ 点击 "Thread Open" → 点击 SEND
 2. 下发链路与 Trace 完全相同（同一 TABLE 缓冲区 1000–7999、状态寄存器 50–69、TrajectoryService + TrajectorySendWorker 线程管理），仅启动事件不同
-3. 实现方式：`TraceProtocol::sendTrajectory()` / `TrajectorySendWorker::startSend()` / `TrajectoryService::startSendTrajectoryAsync()` 均带 `eventId` 参数，Trace 传 `kEventTraj (7)`（默认值），Ctrl Trace 传 `kEventCtrl (9)`
-4. 模式进入/退出校验与 Trace 共用 `enterTraceMode()` / `exitTraceMode()` / `canExitTrace()`；暂停/恢复/停止/Robot Mode 退出等 UI 逻辑同样覆盖 CtrlTrace
+3. `TraceProtocol::sendTrajectory()` 自动在文件记录后附加 CMD_NONE；.dat 文件只保存运动/段控制记录，不需要手工添加结束标记
+4. 控制器 `CTRL_TRACE_STEP()` 是整条混合轨迹的唯一消费者：普通段执行 MOVE/MOVEABS/PT/PTABS/DELAY，FORCE_CFG 后进入力控段，FORCE_OFF 后恢复普通段
+5. FORCE_CFG 记录为 `[30, mode, target_N, contact_N, ramp_N_s, max_adjust_um, reserved]`；可用 `TrajectoryPoint::forceConfig()` 构造，`forceOff()` 构造退出记录
+6. 力控段只接受 PT/PTABS、FORCE_CFG、FORCE_OFF，CMD_NONE 前必须 FORCE_OFF；模式进入/退出校验与 Trace 共用，暂停/恢复同时暂停控制器运动缓冲
 
 ## 控制器信息监控模块
 
@@ -220,11 +223,11 @@ ZMotionDriver (getTable / readModbusReg / readModbusRegs)
 
 ### 状态数据监控
 
-控制器每 5 个伺服周期（1kHz 总线 → 200Hz）把一帧 24 通道状态数据写入 TABLE[21000+] 环形缓冲：TABLE[21000..21001] 为 header（frame_counter 单调递增，0 表示总线初始化未完成、尚未采样），TABLE[21002+] 为帧区（512 帧 × 24 通道，帧号 f 的环形位置 = (f-1) % 512，200Hz 下覆盖 2.56s）。帧内通道：[0-4] dL 支链伸缩量(um)、[5-9] 电机编码器(脉冲)、[10-14] 电机扭矩(‰)、[15-19] 末端位姿 x,y,z(um),phi,theta(角秒)、[20] ee_valid、[21-23] 预留。
+控制器分 10 个伺服周期（1kHz 总线 → 100Hz）把一帧 32 通道状态数据写入 TABLE[21000+] 环形缓冲：TABLE[21000..21001] 为 header（frame_counter 单调递增，0 表示总线初始化未完成、尚未采样），TABLE[21002+] 为帧区（384 帧 × 32 通道，帧号 f 的环形位置 = (f-1) % 384，100Hz 下覆盖 3.84s）。帧内通道：[0-4] dL 支链伸缩量(um)、[5-9] 电机编码器(脉冲)、[10-14] 电机扭矩(‰)、[15-19] 末端位姿 x,y,z(um),phi,theta(角秒)、[20] ee_valid、[21-26] 六轴力/力矩原始值、[27] 滤波法向力(N)、[28] 斜坡后目标力(N)、[29] Z 修正量(um)、[30] 力控模式、[31] 传感器状态。
 
 1. 连接成功后自动启动（`ControllerInfoService::startStatusMonitor()`），周期 100 ms（`kStatusUploadIntervalMs`）
 2. Worker 通过 `statusTimer_` 触发 `pollStatusOnce()` → Protocol 的 `readStatusBatch()` 按帧号增量批量读取（首次只取最新一帧；环形区被覆盖时置 `overflow` 并统计 `droppedFrames`）
-3. UI 只显示最新一帧：`label_dL_J1..5`、`label_motor_encoder1..5`、`label_motor_torque1..5`、`label_ee_x/y/z/phi/theta`；`eeValid` 为假时末端 5 个 label 显示 `-`；phi/theta 由角秒 ÷3600 转为度显示
+3. `StatusSampleFrame` 同时提供力原始值、实际/目标力、Z 修正量、力控模式和传感器状态；现有 UI 显示最新一帧的 dL、编码器、扭矩和末端位姿
 4. 断开连接时 20 个 label 全部复位为 `-`
 
 ### 传感器 TABLE 上传（预留，默认不启动）

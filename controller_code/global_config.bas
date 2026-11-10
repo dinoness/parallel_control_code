@@ -23,22 +23,35 @@ GLOBAL SUB GLOBAL_DEF()
     ' table id config
     GLOBAL CONST TABLE_ROBO_PARA_BEGIN = 0
     GLOBAL CONST TABLE_JOINT_CMD_BEGIN = 300
-    GLOBAL CONST TABLE_CART_CMD_BEGIN = 350
+    GLOBAL CONST TABLE_CART_CMD_BEGIN  = 350
     GLOBAL CONST TABLE_DRIVER_STATUE   = 999
 
-    ' 状态监控环形区（ctrl_mgr.bas 统一伺服周期任务采样，上位机 0.1s 批量读取）
-    ' 每帧通道布局（STATUS_CHANNELS=24）：
-    '   [0-4]  支链伸缩量 dL(um)，MPOS 相对 dl_base 基准
-    '   [5-9]  电机编码器原始脉冲 ENCODER
-    '   [10-14] 电机扭矩 DRIVE_TORQUE（0x6077，千分比 ‰）
-    '   [15-19] 末端位姿 x,y,z,phi,theta（DPOS(6..10)，仅机器人模式有效）
-    '   [20]   ee_valid 标志（1=末端位姿有效，0=无效）
-    '   [21-23] 预留
-    GLOBAL CONST TABLE_STATUS_BASE   = 21000  ' 状态监控环形区 TABLE 基址
-    GLOBAL CONST STATUS_HEADER_FLOATS = 2     ' header：frame_counter + write_index
-    GLOBAL CONST STATUS_RING_FRAMES  = 512    ' 环形帧数（200Hz 采样下覆盖 2.56s，为 0.1s 上传窗口留足链路争抢余量）
-    GLOBAL CONST STATUS_CHANNELS     = 24     ' 每帧通道数
-    GLOBAL CONST STATUS_SAMPLE_DIV   = 2      ' 采样分频：每 2 个伺服周期写一帧（1kHz 总线 → 200Hz），降低上传数据量
+    ' 力传感器适配与控制参数，TABLE 400-419。
+    ' 硬件适配层周期更新 enable/valid/sample_count 和 6 个原始通道；
+    ' 默认 enable=0，未接入传感器时不能进入力控段。
+    GLOBAL CONST TABLE_FORCE_CFG_BEGIN   = 400
+    GLOBAL CONST FORCE_CFG_ENABLE        = 0   ' 1=启用传感器适配层
+    GLOBAL CONST FORCE_CFG_VALID         = 1   ' 1=硬件数据有效
+    GLOBAL CONST FORCE_CFG_SAMPLE_COUNT  = 2   ' 单调递增采样序号，用于断流检测
+    GLOBAL CONST FORCE_CFG_RAW_BEGIN     = 3   ' 3-8: Fx,Fy,Fz,Mx,My,Mz 原始值
+    GLOBAL CONST FORCE_CFG_SCALE         = 9   ' Fz 原始值到 N 的比例，可带符号
+    GLOBAL CONST FORCE_CFG_ZERO          = 10  ' Fz 空载原始零位
+    GLOBAL CONST FORCE_CFG_FILTER_ALPHA  = 11  ' 一阶低通系数，0<alpha<=1
+    GLOBAL CONST FORCE_CFG_KP            = 12  ' 增量式 PI 比例系数
+    GLOBAL CONST FORCE_CFG_KI            = 13  ' 增量式 PI 积分系数
+    GLOBAL CONST FORCE_CFG_MAX_FORCE     = 14  ' 过力保护阈值(N)
+    GLOBAL CONST FORCE_CFG_MAX_ADJUST    = 15  ' 修正量硬限幅(um)
+    GLOBAL CONST FORCE_CFG_MAX_ADJ_RATE  = 16  ' 修正速度限幅(um/s)
+    GLOBAL CONST FORCE_CFG_CONTACT_TICKS = 17  ' 接触阈值连续成立周期数
+    GLOBAL CONST FORCE_CFG_DIRECTION     = 18  ' Z 修正方向，只能为 +1 或 -1
+    GLOBAL CONST FORCE_CFG_STALE_TICKS   = 19  ' 数据允许不更新的最大周期数
+
+    ' 状态监控环形区：384 帧 × 32 通道，与旧布局占用相同 TABLE 空间
+    GLOBAL CONST TABLE_STATUS_BASE    = 21000
+    GLOBAL CONST STATUS_HEADER_FLOATS = 2     ' frame_counter + write_index
+    GLOBAL CONST STATUS_RING_FRAMES   = 384   ' 100Hz 下覆盖 3.84s
+    GLOBAL CONST STATUS_CHANNELS      = 32
+    GLOBAL CONST STATUS_SAMPLE_DIV    = 10    ' 32 通道分 10 个伺服周期写入，每 10ms 提交一帧(100Hz)
 
 
     ' ======================================================
@@ -86,12 +99,32 @@ GLOBAL SUB GLOBAL_DEF()
     GLOBAL CONST MODE_SENSOR_CLOSED    = 5
 
     ' motion_cmd_id
-    GLOBAL CONST CMD_NONE        = 0  ' 无命令（轨迹中作为结束标记）
-    GLOBAL CONST CMD_MOVE        = 1  '
+    GLOBAL CONST CMD_NONE        = 0
+    GLOBAL CONST CMD_MOVE        = 1
     GLOBAL CONST CMD_MOVE_ABS    = 2
     GLOBAL CONST CMD_MOVE_PT     = 9
-    GLOBAL CONST CMD_MOVE_PTABS  = 10  ' 单位时间绝对运动，第7字段为ticks
-    GLOBAL CONST CMD_MOVE_DELAY  = 20  ' 缓冲延时，第7字段为延时毫秒数(ms)
+    GLOBAL CONST CMD_MOVE_PTABS  = 10
+    GLOBAL CONST CMD_MOVE_DELAY  = 20
+    GLOBAL CONST CMD_FORCE_CFG   = 30  ' mode,target_N,contact_N,ramp_N_s,max_adjust_um,reserved
+    GLOBAL CONST CMD_FORCE_OFF   = 31
+
+    ' CTRL 混合轨迹执行状态
+    GLOBAL CONST EXEC_NORMAL           = 0
+    GLOBAL CONST EXEC_WAIT_NORMAL_IDLE = 1
+    GLOBAL CONST EXEC_FORCE            = 2
+    GLOBAL CONST EXEC_WAIT_FORCE_IDLE  = 3
+    GLOBAL CONST EXEC_WAIT_ALL_IDLE    = 4
+
+    GLOBAL CONST FORCE_MODE_IDLE   = 0
+    GLOBAL CONST FORCE_MODE_SEARCH = 1
+    GLOBAL CONST FORCE_MODE_HOLD   = 2
+    GLOBAL CONST FORCE_MODE_FAULT  = 3
+
+    GLOBAL CONST FORCE_SENSOR_DISABLED  = 0
+    GLOBAL CONST FORCE_SENSOR_VALID     = 1
+    GLOBAL CONST FORCE_SENSOR_INVALID   = 2
+    GLOBAL CONST FORCE_SENSOR_STALE     = 3
+    GLOBAL CONST FORCE_SENSOR_OVERLIMIT = 4
 
     ' State flag of data
     GLOBAL CONST F_DataUpdate     = 1
@@ -122,14 +155,19 @@ GLOBAL SUB GLOBAL_DEF()
 
 
     ' error code
-    GLOBAL CONST ERR_OK                = 0
-    GLOBAL CONST ERR_UNKNOWN_CMD       = 1001
-    GLOBAL CONST ERR_MODE_BUSY         = 1002
-    GLOBAL CONST ERR_SYSTEM_NOT_READY  = 1003
-    GLOBAL CONST ERR_NEED_HOME         = 1004
-    GLOBAL CONST ERR_SAFETY_ACTIVE     = 1005
-    GLOBAL CONST ERR_TASK_START_FAIL   = 1006
-    GLOBAL CONST ERR_HOME_FAILED       = 1007
+    GLOBAL CONST ERR_OK                   = 0
+    GLOBAL CONST ERR_UNKNOWN_CMD          = 1001
+    GLOBAL CONST ERR_MODE_BUSY            = 1002
+    GLOBAL CONST ERR_SYSTEM_NOT_READY     = 1003
+    GLOBAL CONST ERR_NEED_HOME            = 1004
+    GLOBAL CONST ERR_SAFETY_ACTIVE        = 1005
+    GLOBAL CONST ERR_TASK_START_FAIL      = 1006
+    GLOBAL CONST ERR_HOME_FAILED          = 1007
+    GLOBAL CONST ERR_FORCE_SENSOR_INVALID = 1008
+    GLOBAL CONST ERR_FORCE_OVERLIMIT      = 1009
+    GLOBAL CONST ERR_FORCE_CMD_INVALID    = 1010
+    GLOBAL CONST ERR_FORCE_BUFFER_TIMEOUT = 1011
+    GLOBAL CONST ERR_FORCE_PARAM_INVALID  = 1012
 
     
 

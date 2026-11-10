@@ -1,4 +1,4 @@
-' 状态监控环形区需 TABLE 至 21000+2+512*24=33290，默认 TSIZE 可能不足；
+' 状态监控环形区需 TABLE 至 21000+2+384*32=33290，默认 TSIZE 可能不足；
 ' TSIZE 重设会清空 TABLE，必须放在最前面（任何 TABLE 使用之前）
 TSIZE = 34000
 
@@ -71,20 +71,41 @@ ROBO_PARA_CONFIG1(bus_total_axis_num)
 '' ==========  定义机械手  ==========
 DEFINE_CFRAME  1000,BUS_NODE_NUM,0,0,0    'framenum, totalaxises, axises_aux,  max_attitudes,  rotatetype
 
-'' ==========  闭环模式变量（必须在周期中断注册前声明）  ==========
-GLOBAL cmd_pos(5)      ' 指令目标位姿，0-4: x,y,z,theta,phi
-GLOBAL adj_pos(5)      ' 力控微调偏移量（由 PID_MOVE 计算，当前恒为0）
-GLOBAL has_target      ' 已读取到有效目标标志
-GLOBAL ctrl_index      ' 下一条待读指令的 TABLE 索引
-GLOBAL traj_over       ' 轨迹结束标志（遇到 CMD_NONE 或非法指令）
-GLOBAL ctrl_running    ' 闭环软件开关：1=周期执行 PID_MOVE，0=仅执行状态采样
+'' ==========  CTRL 混合轨迹与力控变量（必须在周期中断注册前声明）  ==========
+GLOBAL nominal_pos(5)       ' 不含力控修正的名义位姿，0-4: x,y,z,theta,phi
+GLOBAL adj_pos(5)           ' 力控修正量，当前仅使用 Z 分量 adj_pos(2)
+GLOBAL has_target           ' 力控段已读取到有效 PT 目标
+GLOBAL ctrl_index           ' 下一条待读指令的 TABLE 索引
+GLOBAL traj_over            ' 已读到 CMD_NONE，等待全部运动结束
+GLOBAL ctrl_running         ' 整条 CTRL 混合轨迹运行标志
+GLOBAL ctrl_paused          ' 混合轨迹暂停标志，周期采样仍继续
+GLOBAL exec_state           ' EXEC_NORMAL / EXEC_FORCE / 各等待状态
+
+GLOBAL force_active         ' 当前是否处于显式力控段
+GLOBAL force_state          ' IDLE / SEARCH / HOLD / FAULT
+GLOBAL force_cfg_mode       ' 下一段或当前段的力控模式
+GLOBAL force_target_cmd     ' 指令给定的目标力(N)
+GLOBAL force_target_effective ' 经斜坡限制后的实际目标力(N)
+GLOBAL force_contact_threshold ' 接触判定阈值(N)
+GLOBAL force_ramp_rate      ' 目标力变化斜率(N/s)
+GLOBAL force_adjust_limit   ' 当前段修正量限幅(um)
+GLOBAL force_contact_count  ' 接触阈值连续成立周期数
+GLOBAL force_prev_error     ' 上一周期力误差
+GLOBAL buffer_wait_ticks    ' 力控段等待新数据组或运动缓冲的周期数
+
+GLOBAL force_raw(6)         ' Fx,Fy,Fz,Mx,My,Mz 原始值
+GLOBAL force_normal         ' 标度、去皮后的瞬时法向力(N)
+GLOBAL force_filtered       ' 一阶低通后的法向力(N)
+GLOBAL force_sensor_status  ' 传感器有效、无效、断流、过力状态
+GLOBAL force_last_sample_count ' 上一次硬件采样序号
+GLOBAL force_stale_ticks    ' 硬件采样序号未更新的连续周期数
 
 ctrl_running = 0
 
 '' ==========  开启中断功能  ==========
 INT_ENABLE = 1
 
-' 启动统一伺服周期任务（状态采样常驻，闭环分支由 ctrl_running 控制）
+' 启动统一伺服周期任务（状态采样常驻，CTRL 混合轨迹由 ctrl_running 控制）
 ' 必须在 AXIS_CONFIG() 之后调用：dl_base 基准需在 UNITS 设置后采集，保证 dL 单位为 um
 STATUS_INIT()
 
