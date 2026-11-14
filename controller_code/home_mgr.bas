@@ -17,8 +17,9 @@ GLOBAL SUB HOME_ROBOT()
         END SUB
     ENDIF
 
-    IF bus_total_axis_num <> 5 THEN
-        PRINT "轴数不为5"
+    ' 总线共6轴，其中轴5为公转工具，不参与机器人回零
+    IF bus_total_axis_num <> 6 THEN
+        PRINT "总线轴数不为6"
         END SUB
     ENDIF
 
@@ -42,18 +43,18 @@ GLOBAL SUB HOME_ROBOT()
 	NEXT
 
     
-    ' 等待回零完成
-	FOR i_axis = 0 TO (bus_total_axis_num - 1) STEP 1
+    ' 等待5个机器人轴回零完成，轴5不参与
+	FOR i_axis = 0 TO 4 STEP 1
 		WAIT IDLE(i_axis)
 	NEXT
 	
     ' 等待驱动器状态更新
 	DELAY(1000)
 
-	' 检查是否回零成功
+	' 检查5个机器人轴是否回零成功
     LOCAL num_home_axis
 	num_home_axis = 0
-    FOR i_axis = 0 TO (bus_total_axis_num - 1) STEP 1
+    FOR i_axis = 0 TO 4 STEP 1
         TABLE(TABLE_DRIVER_STATUE) = DRIVE_STATUS(i_axis)
         IF READ_BIT2(15, TABLE(TABLE_DRIVER_STATUE)) THEN
             num_home_axis = num_home_axis + 1
@@ -62,7 +63,7 @@ GLOBAL SUB HOME_ROBOT()
 		' PRINT "Home State:"READ_BIT2(15, TABLE(TABLE_DRIVER_STATUE))
     NEXT
 
-    IF num_home_axis <> bus_total_axis_num THEN
+    IF num_home_axis <> 5 THEN
         MODBUS_REG(REG_EVENT_L1) = EVENT_HOME_FAILED
     ELSE
         MODBUS_REG(REG_EVENT_L1) = EVENT_HOME_DONE

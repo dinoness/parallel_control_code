@@ -18,10 +18,12 @@ SOURCES += \
     protocol/ControllerInfoProtocol.cpp \
     protocol/ControllerProtocol.cpp \
     protocol/JointProtocol.cpp \
+    protocol/ToolProtocol.cpp \
     protocol/TraceProtocol.cpp \
     service/ConnectionService.cpp \
     service/ControllerInfoService.cpp \
     service/MotionService.cpp \
+    service/ToolService.cpp \
     service/TrajectoryService.cpp \
     worker/ControllerInfoWorker.cpp \
     worker/TrajectorySendWorker.cpp \
@@ -40,10 +42,12 @@ HEADERS += \
     protocol/ControllerInfoProtocol.h \
     protocol/ControllerProtocol.h \
     protocol/JointProtocol.h \
+    protocol/ToolProtocol.h \
     protocol/TraceProtocol.h \
     service/ConnectionService.h \
     service/ControllerInfoService.h \
     service/MotionService.h \
+    service/ToolService.h \
     service/TrajectoryService.h \
     third_party/zaux/zaux.h \
     third_party/zaux/zmotion.h \

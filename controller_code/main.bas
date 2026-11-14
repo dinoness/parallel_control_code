@@ -1,11 +1,11 @@
-' 状态监控环形区需 TABLE 至 21000+2+384*32=33290，默认 TSIZE 可能不足；
+' 状态监控环形区需 TABLE 至 21000+2+384*22=29450，默认 TSIZE 可能不足；
 ' TSIZE 重设会清空 TABLE，必须放在最前面（任何 TABLE 使用之前）
 TSIZE = 34000
 
 DELAY(3000)  '等待驱动器设备上电完成
 PRINT "总线通讯周期：",SERVO_PERIOD,"us"
 
-GLOBAL CONST BUS_NODE_NUM = 5  ' 期望连接的设备数
+GLOBAL CONST BUS_NODE_NUM = 8  ' 6个电机驱动器 + EK1100（节点6）+ EL3702（节点7）
 GLOBAL CONST BUS_SLOT = 0  ' 槽位号，默认0
 GLOBAL CONST ROBO_PARA_START_ID = 0  ' 参数起始id
 
@@ -22,6 +22,17 @@ GLOBAL last_cmd_seq
 GLOBAL bus_initstate  ' 总线初始化状态
 GLOBAL bus_total_axis_num
 
+' 末端工具命令状态；工具控制不改变机器人FSM状态
+GLOBAL revolution_running
+GLOBAL rotation_running
+GLOBAL revolution_speed_rpm
+GLOBAL rotation_speed_rpm
+
+' EL3702 硬件采集状态；仅在周期中断中更新，不新增任务
+GLOBAL force_use_ain            ' 1=标准AIN，0=PDO原始字节
+GLOBAL force_hw_sample_count    ' 硬件新采样序号，写入TABLE(402)
+GLOBAL force_last_cycle_counter ' PDO路径上一次CH1 CycleCounter
+
 GLOBAL_DEF()
 REG_CLEAR()
 '========================================================
@@ -32,6 +43,13 @@ motion_mode = MODE_IDLE
 motion_lock = MODE_IDLE
 active_task = -1
 safety_state = 0
+revolution_running = 0
+rotation_running = 0
+revolution_speed_rpm = 0
+rotation_speed_rpm = 0
+force_use_ain = 0
+force_hw_sample_count = 0
+force_last_cycle_counter = -1
 
 MODBUS_REG(REG_SYSTEM_STATE) = system_state
 MODBUS_REG(REG_MOTION_MODE) = motion_mode
@@ -66,10 +84,12 @@ MODBUS_REG(REG_SYSTEM_STATE) = SYS_SERVO_READY
 AXIS_CONFIG()
 
 '' ==========  定义几何尺寸  ==========
-ROBO_PARA_CONFIG1(bus_total_axis_num)
+' 结构参数表按5个机器人轴布局，不能包含公转轴5
+ROBO_PARA_CONFIG1(5)
 
 '' ==========  定义机械手  ==========
-DEFINE_CFRAME  1000,BUS_NODE_NUM,0,0,0    'framenum, totalaxises, axises_aux,  max_attitudes,  rotatetype
+' 机器人运动学始终只包含0-4五个实轴，公转轴5不参与CFRAME
+DEFINE_CFRAME  1000,5,0,0,0    'framenum, totalaxises, axises_aux,  max_attitudes,  rotatetype
 
 '' ==========  CTRL 混合轨迹与力控变量（必须在周期中断注册前声明）  ==========
 GLOBAL nominal_pos(5)       ' 不含力控修正的名义位姿，0-4: x,y,z,theta,phi

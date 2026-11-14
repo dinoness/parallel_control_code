@@ -26,9 +26,19 @@ GLOBAL SUB GLOBAL_DEF()
     GLOBAL CONST TABLE_CART_CMD_BEGIN  = 350
     GLOBAL CONST TABLE_DRIVER_STATUE   = 999
 
+    ' 末端工具指令区与公转轴参数。
+    ' ATYPE=66 时通过 DAC 调速，EtherCAT 速度模式的 DAC 单位为脉冲数/秒。
+    ' 公转电机为23位编码器，直驱且驱动器无额外电子齿轮缩放时，每转为2^23脉冲。
+    GLOBAL CONST TABLE_REVOLUTION_SPEED = 450
+    GLOBAL CONST TABLE_ROTATION_SPEED   = 451
+    GLOBAL CONST TOOL_REVOLUTION_AXIS   = 5
+    GLOBAL CONST MAX_TOOL_SPEED_RPM     = 2000
+    GLOBAL CONST TOOL_REV_PULSES_PER_REV = 8388608.0
+    GLOBAL CONST TOOL_DAC_PER_RPM       = TOOL_REV_PULSES_PER_REV / 60.0
+
     ' 力传感器适配与控制参数，TABLE 400-419。
-    ' 硬件适配层周期更新 enable/valid/sample_count 和 6 个原始通道；
-    ' 默认 enable=0，未接入传感器时不能进入力控段。
+    ' 硬件适配层周期更新 valid/sample_count 和 Fz 原始通道；
+    ' 第一阶段 enable=1 用于采集显示，PI 增益保持0，不进行闭环力控。
     GLOBAL CONST TABLE_FORCE_CFG_BEGIN   = 400
     GLOBAL CONST FORCE_CFG_ENABLE        = 0   ' 1=启用传感器适配层
     GLOBAL CONST FORCE_CFG_VALID         = 1   ' 1=硬件数据有效
@@ -46,12 +56,23 @@ GLOBAL SUB GLOBAL_DEF()
     GLOBAL CONST FORCE_CFG_DIRECTION     = 18  ' Z 修正方向，只能为 +1 或 -1
     GLOBAL CONST FORCE_CFG_STALE_TICKS   = 19  ' 数据允许不更新的最大周期数
 
-    ' 状态监控环形区：384 帧 × 32 通道，与旧布局占用相同 TABLE 空间
+    ' 总线节点0-5为驱动器，节点6为EK1100，节点7为EL3702；Fz 接 EL3702 CH1。
+    ' 优先映射标准 AIN；无法识别为 AIN 时读取默认 n=1 的8字节输入PDO：
+    ' CH1 CycleCounter(2字节) + CH1 Value(2字节) + CH2 CycleCounter + CH2 Value。
+    GLOBAL CONST FORCE_NODE              = 7
+    GLOBAL CONST FORCE_AIN_BASE          = 32  ' AIN(32)=CH1计数器，AIN(33)=CH1模拟量；起始编号须为8的倍数
+    GLOBAL CONST FORCE_PDO_TABLE_BEGIN   = 420 ' 420-427，每个TABLE保存1个PDO字节
+    GLOBAL CONST FORCE_PDO_BYTES         = 8
+    GLOBAL CONST FORCE_FZ_FULL_SCALE_N   = 49.03325 ' 5kgf，仅作理论标定初值
+    GLOBAL CONST FORCE_ADC_FULL_SCALE    = 32768    ' EL3702 ±10V 对应有符号16位满量程
+    GLOBAL CONST FORCE_FZ_DEFAULT_SCALE  = FORCE_FZ_FULL_SCALE_N / FORCE_ADC_FULL_SCALE
+
+    ' 状态监控环形区：384 帧 × 22 通道
     GLOBAL CONST TABLE_STATUS_BASE    = 21000
     GLOBAL CONST STATUS_HEADER_FLOATS = 2     ' frame_counter + write_index
     GLOBAL CONST STATUS_RING_FRAMES   = 384   ' 100Hz 下覆盖 3.84s
-    GLOBAL CONST STATUS_CHANNELS      = 32
-    GLOBAL CONST STATUS_SAMPLE_DIV    = 10    ' 32 通道分 10 个伺服周期写入，每 10ms 提交一帧(100Hz)
+    GLOBAL CONST STATUS_CHANNELS      = 22
+    GLOBAL CONST STATUS_SAMPLE_DIV    = 10    ' 每 10ms 在一个伺服周期内批量采集并提交完整帧(100Hz)
 
 
     ' ======================================================
@@ -81,6 +102,10 @@ GLOBAL SUB GLOBAL_DEF()
     GLOBAL CONST EVENT_TRAJ_DONE     = 8
     GLOBAL CONST EVENT_CTRL          = 9
     GLOBAL CONST EVENT_CTRL_DONE     = 10
+    GLOBAL CONST EVENT_REVOLUTION_START = 11
+    GLOBAL CONST EVENT_REVOLUTION_STOP  = 12
+    GLOBAL CONST EVENT_ROTATION_START   = 13
+    GLOBAL CONST EVENT_ROTATION_STOP    = 14
     GLOBAL CONST EVENT_ROBOT_IN      = 21
     GLOBAL CONST EVENT_ROBOT_OUT     = 22
     GLOBAL CONST EVENT_STOP          = 81
@@ -168,6 +193,8 @@ GLOBAL SUB GLOBAL_DEF()
     GLOBAL CONST ERR_FORCE_CMD_INVALID    = 1010
     GLOBAL CONST ERR_FORCE_BUFFER_TIMEOUT = 1011
     GLOBAL CONST ERR_FORCE_PARAM_INVALID  = 1012
+    GLOBAL CONST ERR_TOOL_RUNNING         = 1013
+    GLOBAL CONST ERR_TOOL_SPEED_INVALID   = 1014
 
     
 

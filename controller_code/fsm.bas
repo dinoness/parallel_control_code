@@ -36,7 +36,18 @@ GLOBAL SUB SMF_DISPATCH(current_state, cur_event)
         RETURN
     ENDIF
 
-    ' 按当前状态分发
+    ' 按当前系统状态分发
+    ' 急停先停止末端工具，再继续执行原状态的急停处理。
+    IF cur_event = EVENT_ESTOP THEN
+        TOOL_ALL_STOP()
+    ENDIF
+
+    ' 工具是独立功能，不改变机器人system_state/motion_mode/active_task。
+    IF cur_event = EVENT_REVOLUTION_START OR cur_event = EVENT_REVOLUTION_STOP OR cur_event = EVENT_ROTATION_START OR cur_event = EVENT_ROTATION_STOP THEN
+        TOOL_HANDLE_EVENT(current_state, cur_event)
+        RETURN
+    ENDIF
+
     IF current_state = SYS_SERVO_READY THEN
         Handle_SYS_SERVO_READY(cur_event)
     ELSEIF current_state = SYS_HOMING THEN
@@ -65,6 +76,12 @@ END SUB
 ' ================================================================
 SUB Handle_SYS_SERVO_READY(cur_event)
     IF cur_event = EVENT_HOME THEN
+        ' 启动回零任务前，两个末端工具必须均已停止
+        IF TOOL_CAN_HOME() = 0 THEN
+            MODBUS_REG(REG_CMD_ERROR) = ERR_TOOL_RUNNING
+            PRINT "[FSM] 拒绝回零：请先停止公转和自转电机"
+            RETURN
+        ENDIF
         ' 启动回零任务
         ' 注: home_robot() 内部使用 DATUM 指令，在后台任务中执行
         '     完成后需通过 MODBUS_REG 写入 EVENT_HOME_DONE 通知FSM
@@ -190,7 +207,12 @@ END SUB
 ' ================================================================
 SUB Handle_SYS_READY(cur_event)
     IF cur_event = EVENT_HOME THEN
-        ' 重新执行回零（例如更换工具后重新标定）
+        ' 重新执行回零（例如更换工具后重新标定），工具必须先停止
+        IF TOOL_CAN_HOME() = 0 THEN
+            MODBUS_REG(REG_CMD_ERROR) = ERR_TOOL_RUNNING
+            PRINT "[FSM] 拒绝回零：请先停止公转和自转电机"
+            RETURN
+        ENDIF
         RUNTASK TASK_HOEM, home_robot()
         motion_mode = MODE_HOME
         active_task = TASK_HOEM
@@ -289,8 +311,9 @@ SUB Handle_SYS_ROBOT_MODE(cur_event)
         PRINT "[FSM] 单轴调整开始，状态: SYS_ROBOT_MODE -> SYS_RUNNING"
 
     ELSEIF cur_event = EVENT_ROBOT_OUT THEN
-        ' 退出机器人模式，回到伺服就绪态
-		RAPIDSTOP
+        ' 退出机器人模式，只取消机器人轴运动，不影响公转工具
+        BASE(0,1,2,3,4)
+        RAPIDSTOP
         CANCEL  ' 用来退出机械手模式，CANCEL(0)才能完整退出机械手模式
         ' 虚轴 6-10 已无效，末端位姿停止采样
         ee_valid = 0
@@ -298,7 +321,12 @@ SUB Handle_SYS_ROBOT_MODE(cur_event)
         PRINT "[FSM] 退出机器人模式，状态: SYS_ROBOT_MODE -> SYS_SERVO_READY"
 
     ELSEIF cur_event = EVENT_HOME THEN
-        ' 重新执行回零
+        ' 重新执行回零前，两个末端工具必须均已停止
+        IF TOOL_CAN_HOME() = 0 THEN
+            MODBUS_REG(REG_CMD_ERROR) = ERR_TOOL_RUNNING
+            PRINT "[FSM] 拒绝回零：请先停止公转和自转电机"
+            RETURN
+        ENDIF
         RUNTASK TASK_HOEM, home_robot()
         motion_mode = MODE_HOME
         active_task = TASK_HOEM
@@ -346,7 +374,8 @@ SUB Handle_SYS_RUNNING(cur_event)
             PRINT "[FSM] 闭环控制被停止"
         ENDIF
 
-        RAPIDSTOP(4)  ' 取消当前运动和缓冲运动
+        BASE(0,1,2,3,4)
+        RAPIDSTOP(4)  ' 仅取消机器人轴当前运动和缓冲运动，公转工具继续运行
         WAIT IDLE
         motion_mode = MODE_IDLE
         active_task = -1
@@ -388,6 +417,7 @@ SUB Handle_SYS_RUNNING(cur_event)
             system_state = SYS_ROBOT_MODE
             PRINT "[FSM] CTRL 混合轨迹完成，状态: SYS_RUNNING -> SYS_ROBOT_MODE"
         ELSE
+            TOOL_ALL_STOP()
             system_state = SYS_ERROR
             PRINT "[FSM] CTRL 混合轨迹异常，状态: SYS_RUNNING -> SYS_ERROR"
         ENDIF
@@ -480,7 +510,8 @@ SUB Handle_SYS_PAUSED(cur_event)
             CTRL_MOVE_END()
         ENDIF
 
-        RAPIDSTOP(1)  ' 取消缓冲运动
+        BASE(0,1,2,3,4)
+        RAPIDSTOP(1)  ' 仅取消机器人轴缓冲运动，公转工具继续运行
         WAIT IDLE
         motion_mode = MODE_IDLE
         active_task = -1

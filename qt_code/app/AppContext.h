@@ -8,6 +8,7 @@
 #include "service/ConnectionService.h"
 #include "service/ControllerInfoService.h"
 #include "service/MotionService.h"
+#include "service/ToolService.h"
 #include "service/TrajectoryService.h"
 
 class AppContext
@@ -22,6 +23,7 @@ public:
     ControllerInfoProtocol* controllerInfoProtocol();
     ConnectionService* connectionService();
     MotionService* motionService();
+    ToolService* toolService();
     TrajectoryService* trajectoryService();
     ControllerInfoService* controllerInfoService();
 
@@ -32,6 +34,7 @@ private:
     TraceProtocol traceProtocol_;
     ControllerInfoProtocol controllerInfoProtocol_;
     ConnectionService connectionService_;
+    ToolService toolService_;
     MotionService motionService_;
     TrajectoryService trajectoryService_;
     ControllerInfoService controllerInfoService_;

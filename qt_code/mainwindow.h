@@ -66,6 +66,10 @@ private slots:
     void on_btn_ctrl_exit_clicked();
     void on_btn_ctrl_send_clicked();
 
+    // End Tool（末端工具）
+    void on_btn_revolution_clicked();
+    void on_btn_rotation_clicked();
+
     // Control
     void on_btn_pause_resume_clicked();
     void on_btn_stop_clicked();
@@ -103,6 +107,11 @@ private:
     void sendTraceFile();
     void sendCtrlTraceFile();
 
+    // ── 末端工具 ──────────────────────────────────────
+    void updateRevolutionUi();
+    void updateRotationUi();
+    void resetToolUi();
+
     // ── 全局控制 ──────────────────────────────────────
     void sendPause();
     void sendResume();
@@ -114,6 +123,8 @@ private:
     MotionMode currentMotionMode_ = MotionMode::None;
     bool traceThreadOpened_ = false;
     bool robotModeActive_ = false;
+    bool revolutionRunning_ = false;
+    bool rotationRunning_ = false;
 };
 
 #endif // MAINWINDOW_H

@@ -133,12 +133,12 @@ SYS_BOOT → SYS_BUS_INIT → SYS_SERVO_READY ⇄ SYS_HOMING → SYS_READY ⇄ S
 
 普通运动任务之间互斥，同一时间只能有一个运动任务在运行，暂停/恢复通过 `PAUSETASK`/`RESUMETASK` 实现。
 CTRL 混合轨迹不是 RUNTASK 任务，也不单独申请中断。`STATUS_INIT()` 只注册一次 TASK_CTRL 周期中断，
-`SERVO_CYCLE()` 每周期先执行 FORCE_SAMPLE，在 ctrl_running=1 且未暂停时执行 CTRL_TRACE_STEP，最后始终执行 STATUS_SAMPLE。
+`SERVO_CYCLE()` 每周期依次执行 FORCE_HARDWARE_SAMPLE、FORCE_SAMPLE，在 ctrl_running=1 且未暂停时执行 CTRL_TRACE_STEP，最后始终执行 STATUS_SAMPLE。
 CTRL_MOVE() 启动完整混合轨迹；普通 MOVE/MOVEABS/PT/DELAY 与力控段均由 CTRL_TRACE_STEP 消费，不与 TRAJ_MOVE 同时运行。
 FORCE_CFG/FORCE_OFF 显式划分力控段，阶段切换通过非阻塞 IDLE 检查；CMD_NONE 等待所有运动结束后才写 EVENT_CTRL_DONE。
 CTRL_MOVE_PAUSE()/CTRL_MOVE_RESUME() 同时使用 MOVE_PAUSE/MOVE_RESUME 暂停运动缓冲，不能对 TASK_CTRL 使用 PAUSETASK/RESUMETASK。
-力传感器通过 TABLE 400-419 适配，默认关闭且 PI 增益为 0；当前仅进行 Z 法向增量式 PI，具备接触搜索、目标力斜坡、断流/过力保护。
-状态采样写入 TABLE 环形区（TABLE_STATUS_BASE=21000 起，header 2 + 384 帧 × 32 通道），包含六轴原始力、法向力、目标力、Z 修正量和传感器状态。
+力传感器通过 TABLE 400-419 适配。第一阶段接入 EK1100（节点6）后的 EL3702（节点7）CH1：优先标准 AIN，AIN(32)=CH1 CycleCounter、AIN(33)=CH1 模拟量（按有符号 INT16 处理），否则从默认8字节 PDO 读取到 TABLE 420-427；只采集 Fz，PI 增益为 0，理论比例和零位待实测校准。
+状态采样写入 TABLE 环形区（TABLE_STATUS_BASE=21000 起，header 2 + 384 帧 × 22 通道），包含 dL、扭矩、末端位姿和六轴原始力；编码器及力控派生状态不上传。
 
 ### 运动学系统
 
@@ -154,7 +154,7 @@ CTRL_MOVE_PAUSE()/CTRL_MOVE_RESUME() 同时使用 MOVE_PAUSE/MOVE_RESUME 暂停�
 
 详见 `register_assignment.md`。
 
-- **TABLE**: 0-299 结构参数 / 300-349 单轴指令 / 350-399 点动指令 / 400-419 力传感器与力控参数 / 420-999 预留 / 1000-9999 轨迹数据 / 21000-33289 状态监控环形区（384 帧 × 32 通道，要求 TSIZE ≥ 33290）
+- **TABLE**: 0-299 结构参数 / 300-349 单轴指令 / 350-399 点动指令 / 400-419 力传感器与力控参数 / 420-999 预留 / 1000-9999 轨迹数据 / 21000-29449 状态监控环形区（384 帧 × 22 通道，要求 TSIZE ≥ 29450）
 - **MODBUS_REG**: 0-49 系统状态 / 50-69 轨迹状态 / 70-79 点动状态 / 80-89 单轴状态 / 90-99 事件序列
 
 ## 开发约定
@@ -213,10 +213,10 @@ CTRL_MOVE_PAUSE()/CTRL_MOVE_RESUME() 同时使用 MOVE_PAUSE/MOVE_RESUME 暂停�
 - [ ] 正解（当前为桩实现，返回固定坐标）
 - [ ] 笛卡尔点动（CART_JOG_TASK 为桩函数）
 - [x] 轨迹执行器（TRAJ_MOVE，支持 MOVE/MOVEABS/MOVE_PT/MOVE_PTABS/MOVE_DELAY，cmd_id=0 结束标记）
-- [ ] CTRL 混合轨迹与力控（代码框架已实现：普通段与 FORCE_CFG/FORCE_OFF 力控段统一消费，Z 法向增量式 PI、接触搜索、目标力斜坡、断流/过力保护；实际传感器硬件适配和增益整定待完成，默认传感器关闭且增益为 0）
+- [ ] CTRL 混合轨迹与力控（普通段与 FORCE_CFG/FORCE_OFF 力控段统一消费，Z 法向增量式 PI、接触搜索、目标力斜坡、断流/过力保护；第一阶段 EL3702 Fz 采集代码已接入但尚未硬件验证，PI 增益为 0，标定和增益整定待完成）
 - [ ] 安全监控完整实现
 - [ ] 限位检测逻辑
-- [x] 状态采样上传（ctrl_mgr.bas：统一 INT_CYCLE 常驻采样，384 帧 × 32 通道写入 TABLE 21000-33289，包含机器人状态与力控数据，header 最后写保证帧完整性）
+- [x] 状态采样上传（ctrl_mgr.bas：统一 INT_CYCLE 常驻采样，384 帧 × 22 通道写入 TABLE 21000-29449，包含 dL、扭矩、末端位姿和六轴原始力，header 最后写保证帧完整性）
 
 ## 相关文档
 

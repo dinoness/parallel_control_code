@@ -59,6 +59,21 @@ constexpr int kCartJogTableSize   = kCartJogBufferSize * kCartJogCmdSize;  // 35
 constexpr int kRegCartJogStatusBase  = 70;    // 指令执行状态REG地址 (70~79)
 
 // ===================================================================
+// 力传感器标定（与 controller_code/global_config.bas 同步）
+// ===================================================================
+
+constexpr int kForceConfigTableBase = 400;
+constexpr int kForceScaleOffset     = 9;   // TABLE(409)：Fz 原始值到 N 的比例
+constexpr int kForceZeroOffset      = 10;  // TABLE(410)：Fz 空载原始零位
+
+// ===================================================================
+// End Tool（末端工具）
+// ===================================================================
+
+constexpr int kRevolutionSpeedTable = 450;  // 公转电机目标转速，单位 rpm
+constexpr int kRotationSpeedTable   = 451;  // 自转电机目标转速，单位 rpm
+
+// ===================================================================
 // Traj
 // ===================================================================
 
@@ -91,6 +106,10 @@ constexpr int kEventTraj        = 7;
 constexpr int kEventTrajDone    = 8;
 constexpr int kEventCtrl        = 9;
 constexpr int kEventCtrlDone    = 10;
+constexpr int kEventRevolutionStart = 11;
+constexpr int kEventRevolutionStop  = 12;
+constexpr int kEventRotationStart   = 13;
+constexpr int kEventRotationStop    = 14;
 constexpr int kEventRobotIn     = 21;
 constexpr int kEventRobotOut    = 22;
 constexpr int kEventStop        = 81;
@@ -124,6 +143,9 @@ constexpr int kForceModeHold   = 2;
 
 constexpr float kMaxManualSpeedMmPs = 20.0f;
 
+// 末端工具转速绝对值上限（rpm），与控制器侧 MAX_TOOL_SPEED_RPM 对应
+constexpr float kMaxToolSpeedRpm = 2000.0f;
+
 // ===================================================================
 // Controller Info / Sensor TABLE Upload
 // ===================================================================
@@ -154,14 +176,14 @@ constexpr int kSensorDefaultUploadIntervalMs = 20;
 // 机器人状态显示（状态数据 TABLE 环形缓冲）
 // ===================================================================
 
-// 控制器分 10 个伺服周期（1kHz 总线 → 100Hz）写入一帧 32 通道状态数据
+// 控制器每 10 个伺服周期（1kHz 总线 → 100Hz）用一条 TABLE 指令采集一帧 22 通道状态数据
 // TABLE[21000..21001] 为 2 个 float64 的 header：[frame_counter, write_index]
 // frame_counter 单调递增，0 表示控制器尚未开始采样（总线初始化未完成）
-// TABLE[21002+] 为帧区，384 帧 × 32 个 float，帧号 f 的环形位置 = (f-1) % 384
-// 100Hz 下覆盖 3.84s；与旧 512×24 布局具有相同的 TABLE 总占用
+// TABLE[21002+] 为帧区，384 帧 × 22 个 float，帧号 f 的环形位置 = (f-1) % 384
+// 100Hz 下覆盖 3.84s，最后使用 TABLE[29449]
 constexpr int kStatusTableBase = 21000;
 constexpr int kStatusHeaderFloats = 2;
 constexpr int kStatusFrameBase = 21002;      // kStatusTableBase + kStatusHeaderFloats
-constexpr int kStatusChannelCount = 32;
+constexpr int kStatusChannelCount = 22;
 constexpr int kStatusRingFrameCapacity = 384;
 constexpr int kStatusUploadIntervalMs = 100;

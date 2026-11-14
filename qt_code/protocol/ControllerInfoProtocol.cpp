@@ -257,7 +257,20 @@ Result ControllerInfoProtocol::readStatusBatch(quint64& lastFrameCounter,
         }
     }
 
-    // 4. start..newest 按环形位置分一到两段连续区间批量读取
+    // 4. 读取 Fz 标定参数：TABLE(409)=比例，TABLE(410)=空载零位
+    QVector<float> calibration;
+    ret = driver_->getTable(kForceConfigTableBase + kForceScaleOffset,
+                            kForceZeroOffset - kForceScaleOffset + 1,
+                            calibration);
+    if (!ret.ok) return ret;
+    if (calibration.size() < 2) {
+        return Result::fail(3603,
+            QString("Fz 标定参数不足: 期望=2 实际=%1").arg(calibration.size()));
+    }
+    const float fzScale = calibration[0];
+    const float fzZero = calibration[kForceZeroOffset - kForceScaleOffset];
+
+    // 5. start..newest 按环形位置分一到两段连续区间批量读取
     // 帧号 f 的环形位置 = (f-1) % 容量
     int startRing = static_cast<int>((start - 1) % kStatusRingFrameCapacity);
     quint64 totalFrames = newest - start + 1;
@@ -284,7 +297,7 @@ Result ControllerInfoProtocol::readStatusBatch(quint64& lastFrameCounter,
                     .arg(floatCount).arg(raw.size()));
         }
 
-        // 5. 逐帧解析填充 StatusSampleFrame
+        // 6. 逐帧解析填充 StatusSampleFrame
         for (int i = 0; i < static_cast<int>(segFrames); ++i) {
             const float* ch = raw.constData() + i * kStatusChannelCount;
 
@@ -294,25 +307,20 @@ Result ControllerInfoProtocol::readStatusBatch(quint64& lastFrameCounter,
 
             for (int j = 0; j < 5; ++j) {
                 frame.dL[j]      = ch[j];       // 支链伸缩量 um
-                frame.encoder[j] = ch[5 + j];   // 电机编码器 脉冲
-                frame.torque[j]  = ch[10 + j];  // 电机扭矩 千分比
-                frame.ee[j]      = ch[15 + j];  // 末端位姿 x,y,z(um), phi,theta(角秒)
+                frame.torque[j]  = ch[5 + j];   // 电机扭矩 千分比
+                frame.ee[j]      = ch[10 + j];  // 末端位姿 x,y,z(um), phi,theta(角秒)
             }
-            frame.eeValid = (ch[20] > 0.5f);
+            frame.eeValid = (ch[15] > 0.5f);
             for (int j = 0; j < 6; ++j) {
-                frame.forceRaw[j] = ch[21 + j];
+                frame.forceRaw[j] = ch[16 + j];
             }
-            frame.forceNormal = ch[27];
-            frame.forceTarget = ch[28];
-            frame.forceAdjustment = ch[29];
-            frame.forceState = static_cast<int>(ch[30]);
-            frame.forceSensorStatus = static_cast<int>(ch[31]);
+            frame.fzNewton = (frame.forceRaw[2] - fzZero) * fzScale;
 
             batch.frames.append(frame);
         }
     }
 
-    // 6. 更新最后读取帧号
+    // 7. 更新最后读取帧号
     lastFrameCounter = newest;
 
     return Result::success();

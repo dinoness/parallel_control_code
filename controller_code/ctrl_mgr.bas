@@ -9,8 +9,8 @@
 '    FORCE_CFG 和 FORCE_OFF。CMD_NONE 前必须显式 FORCE_OFF。
 ' 4. 力控段内部统一维护 nominal_pos，最终使用 ticks=1 的 MOVE_PTABS 输出
 '    nominal_pos + adj_pos，避免相对 PT 重复累加修正量。
-' 5. 力传感器硬件适配层通过 TABLE 400-419 接入，默认关闭；未接入硬件、
-'    数据断流或过力时禁止进入/继续力控。当前仅对 Z 施加增量式 PI 修正。
+' 5. EL3702 通过 TABLE 400-419 适配，第一阶段仅采集显示且 PI 增益为0；
+'    未接入硬件、数据断流或过力时禁止进入/继续力控。当前仅对 Z 施加增量式 PI 修正。
 ' ================================================================
 
 ' 初始化状态采样、力控默认参数，并注册全工程唯一的伺服周期中断
@@ -53,16 +53,17 @@ GLOBAL SUB STATUS_INIT()
         force_raw(i) = 0
     NEXT
 
-    ' 默认安全参数：传感器关闭、PI 增益为 0。接入硬件后再修改比例和零位。
-    TABLE(TABLE_FORCE_CFG_BEGIN, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1.0, 0.0, 1.0, 0.0, 0.0, 50.0, 5000.0, 1000.0, 5, 1.0, 10)
+    ' 第一阶段只采集和显示：启用硬件适配，PI增益保持0；比例是理论初值，需实测校准。
+    TABLE(TABLE_FORCE_CFG_BEGIN, 1, 0, 0, 0, 0, 0, 0, 0, 0, FORCE_FZ_DEFAULT_SCALE, 0.0, 1.0, 0.0, 0.0, 50.0, 5000.0, 1000.0, 5, 1.0, 10)
 
     TABLE(TABLE_STATUS_BASE) = 0
     TABLE(TABLE_STATUS_BASE + 1) = 0
     INT_CYCLE(1, TASK_CTRL, SERVO_CYCLE)
 END SUB
 
-' 统一伺服周期入口：采集和控制优先，状态采样常驻
+' 统一伺服周期入口：硬件采集和力控适配优先，状态采样常驻
 GLOBAL SUB SERVO_CYCLE()
+    FORCE_HARDWARE_SAMPLE()
     FORCE_SAMPLE()
     IF ctrl_running = 1 AND ctrl_paused = 0 THEN
         CTRL_TRACE_STEP()
@@ -76,6 +77,51 @@ GLOBAL SUB DL_BASE_CAPTURE()
     FOR i = 0 TO 4
         dl_base(i) = MPOS(i)
     NEXT
+END SUB
+
+' EL3702 CH1硬件采集：只更新Fz原始值，其余五轴保持0。
+' PDO每个TABLE元素保存1字节，小端拼接；CycleCounter不变时不推进采样序号。
+GLOBAL SUB FORCE_HARDWARE_SAMPLE()
+    LOCAL cycle_counter, fz_raw
+
+    IF NODE_STATUS(BUS_SLOT, FORCE_NODE) <> 1 THEN
+        TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_VALID) = 0
+        RETURN
+    ENDIF
+
+    IF force_use_ain = 1 THEN
+        ' EL3702标准AIN按PDO顺序映射：AIN(32)=CH1 CycleCounter，AIN(33)=CH1 Value。
+        ' CycleCounter不变时没有新记录，避免把同一采样重复计数。
+        cycle_counter = AIN(FORCE_AIN_BASE)
+        IF cycle_counter = force_last_cycle_counter THEN
+            RETURN
+        ENDIF
+        force_last_cycle_counter = cycle_counter
+
+        fz_raw = AIN(FORCE_AIN_BASE + 1)
+        ' AIN可能以0-65535返回INT16原始码，先恢复±10V对应的有符号数值。
+        IF fz_raw >= 32768 THEN
+            fz_raw = fz_raw - 65536
+        ENDIF
+    ELSE
+        NODE_PDO_RDBUFF(BUS_SLOT, FORCE_NODE, 0, FORCE_PDO_TABLE_BEGIN, FORCE_PDO_BYTES)
+        cycle_counter = TABLE(FORCE_PDO_TABLE_BEGIN) + TABLE(FORCE_PDO_TABLE_BEGIN + 1) * 256
+        IF cycle_counter = force_last_cycle_counter THEN
+            RETURN
+        ENDIF
+        force_last_cycle_counter = cycle_counter
+
+        fz_raw = TABLE(FORCE_PDO_TABLE_BEGIN + 2) + TABLE(FORCE_PDO_TABLE_BEGIN + 3) * 256
+        IF fz_raw >= 32768 THEN
+            fz_raw = fz_raw - 65536
+        ENDIF
+    ENDIF
+
+    force_hw_sample_count = force_hw_sample_count + 1
+    TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_VALID) = 1
+    TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_RAW_BEGIN + 2) = fz_raw
+    ' 原始值就绪后最后推进序号，FORCE_SAMPLE据此识别新采样并检测断流。
+    TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_SAMPLE_COUNT) = force_hw_sample_count
 END SUB
 
 ' 力传感器采集适配：硬件层更新采样序号和原始通道，本函数完成断流检测、标定和滤波
@@ -130,73 +176,27 @@ GLOBAL SUB FORCE_TARE()
     ENDIF
 END SUB
 
-' 状态采样：100Hz 提交一帧，32 通道分 10 个伺服周期写入。
-' 每周期最多处理 4 个数据通道，避免与 CTRL 运动下发叠加后超过 333us。
-' header 始终最后更新，上位机只会把已提交帧视为完整帧。
+' 状态采样：每 10ms 在一个伺服周期内用一条 TABLE 指令提交完整 22 通道帧(100Hz)。
+' 布局：[0-4] dL；[5-9] 扭矩；[10-14] 末端位姿；[15] ee_valid；[16-21] 六轴力原始值。
+' 不上传编码器及滤波力、目标力、修正量等派生状态；header 最后更新以保证帧完整。
 GLOBAL SUB STATUS_SAMPLE()
     LOCAL base_addr
-
-    base_addr = TABLE_STATUS_BASE + STATUS_HEADER_FLOATS + status_write_index * STATUS_CHANNELS
-
-    IF status_tick = 0 THEN
-        TABLE(base_addr) = MPOS(0) - dl_base(0)
-        TABLE(base_addr + 1) = MPOS(1) - dl_base(1)
-        TABLE(base_addr + 2) = MPOS(2) - dl_base(2)
-    ELSEIF status_tick = 1 THEN
-        TABLE(base_addr + 3) = MPOS(3) - dl_base(3)
-        TABLE(base_addr + 4) = MPOS(4) - dl_base(4)
-        TABLE(base_addr + 5) = ENCODER(0)
-    ELSEIF status_tick = 2 THEN
-        TABLE(base_addr + 6) = ENCODER(1)
-        TABLE(base_addr + 7) = ENCODER(2)
-        TABLE(base_addr + 8) = ENCODER(3)
-        TABLE(base_addr + 9) = ENCODER(4)
-    ELSEIF status_tick = 3 THEN
-        TABLE(base_addr + 10) = DRIVE_TORQUE(0)
-        TABLE(base_addr + 11) = DRIVE_TORQUE(1)
-        TABLE(base_addr + 12) = DRIVE_TORQUE(2)
-    ELSEIF status_tick = 4 THEN
-        TABLE(base_addr + 13) = DRIVE_TORQUE(3)
-        TABLE(base_addr + 14) = DRIVE_TORQUE(4)
-        IF ee_valid = 1 THEN
-            TABLE(base_addr + 15) = DPOS(6)
-        ENDIF
-    ELSEIF status_tick = 5 THEN
-        IF ee_valid = 1 THEN
-            TABLE(base_addr + 16) = DPOS(7)
-            TABLE(base_addr + 17) = DPOS(8)
-            TABLE(base_addr + 18) = DPOS(9)
-        ENDIF
-    ELSEIF status_tick = 6 THEN
-        IF ee_valid = 1 THEN
-            TABLE(base_addr + 19) = DPOS(10)
-            TABLE(base_addr + 20) = 1
-        ELSE
-            TABLE(base_addr + 20) = 0
-        ENDIF
-        TABLE(base_addr + 21) = force_raw(0)
-    ELSEIF status_tick = 7 THEN
-        TABLE(base_addr + 22) = force_raw(1)
-        TABLE(base_addr + 23) = force_raw(2)
-        TABLE(base_addr + 24) = force_raw(3)
-        TABLE(base_addr + 25) = force_raw(4)
-    ELSEIF status_tick = 8 THEN
-        TABLE(base_addr + 26) = force_raw(5)
-        TABLE(base_addr + 27) = force_filtered
-        TABLE(base_addr + 28) = force_target_effective
-        TABLE(base_addr + 29) = adj_pos(2)
-    ELSE
-        TABLE(base_addr + 30) = force_state
-        TABLE(base_addr + 31) = force_sensor_status
-        ' 第 10 段：写完最后两个通道后立即提交完整帧
-        status_write_index = (status_write_index + 1) MOD STATUS_RING_FRAMES
-        status_frame_counter = status_frame_counter + 1
-        TABLE(TABLE_STATUS_BASE, status_frame_counter, status_write_index)
-    ENDIF
 
     status_tick = status_tick + 1
     IF status_tick >= STATUS_SAMPLE_DIV THEN
         status_tick = 0
+        base_addr = TABLE_STATUS_BASE + STATUS_HEADER_FLOATS + status_write_index * STATUS_CHANNELS
+
+        IF ee_valid = 1 THEN
+            TABLE(base_addr, MPOS(0)-dl_base(0), MPOS(1)-dl_base(1), MPOS(2)-dl_base(2), MPOS(3)-dl_base(3), MPOS(4)-dl_base(4), DRIVE_TORQUE(0), DRIVE_TORQUE(1), DRIVE_TORQUE(2), DRIVE_TORQUE(3), DRIVE_TORQUE(4), DPOS(6), DPOS(7), DPOS(8), DPOS(9), DPOS(10), 1, force_raw(0), force_raw(1), force_raw(2), force_raw(3), force_raw(4), force_raw(5))
+        ELSE
+            TABLE(base_addr, MPOS(0)-dl_base(0), MPOS(1)-dl_base(1), MPOS(2)-dl_base(2), MPOS(3)-dl_base(3), MPOS(4)-dl_base(4), DRIVE_TORQUE(0), DRIVE_TORQUE(1), DRIVE_TORQUE(2), DRIVE_TORQUE(3), DRIVE_TORQUE(4), 0, 0, 0, 0, 0, 0, force_raw(0), force_raw(1), force_raw(2), force_raw(3), force_raw(4), force_raw(5))
+        ENDIF
+
+        ' 完整帧写完后再提交 header
+        status_write_index = (status_write_index + 1) MOD STATUS_RING_FRAMES
+        status_frame_counter = status_frame_counter + 1
+        TABLE(TABLE_STATUS_BASE, status_frame_counter, status_write_index)
     ENDIF
 END SUB
 

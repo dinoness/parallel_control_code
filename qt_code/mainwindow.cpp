@@ -66,6 +66,15 @@ void MainWindow::Init()
     ui->ledit_speed->setValidator(
         new QDoubleValidator(0.01, kMaxManualSpeedMmPs, 2, this));
 
+    // 末端工具转速：单位 rpm，负数表示反转，零转速通过停止按钮处理
+    ui->ledit_revolution_speed->setText("10");
+    ui->ledit_rotation_speed->setText("10");
+    ui->ledit_revolution_speed->setValidator(
+        new QDoubleValidator(-kMaxToolSpeedRpm, kMaxToolSpeedRpm, 2, this));
+    ui->ledit_rotation_speed->setValidator(
+        new QDoubleValidator(-kMaxToolSpeedRpm, kMaxToolSpeedRpm, 2, this));
+    resetToolUi();
+
     updateMotionModeDisplay();
 
     // ── 连接状态 ──────────────────────────────────────
@@ -96,21 +105,22 @@ void MainWindow::Init()
                         paused_ = false;
                         ui->btn_pause_resume->setText("PAUSE");
                     }
+                    resetToolUi();
 
                     // 断线时复位机器人状态显示 label
-                    QLabel* statusLabels[20] = {
+                    QLabel* statusLabels[21] = {
                         ui->label_dL_J1, ui->label_dL_J2, ui->label_dL_J3,
                         ui->label_dL_J4, ui->label_dL_J5,
-                        ui->label_motor_encoder1, ui->label_motor_encoder2,
-                        ui->label_motor_encoder3, ui->label_motor_encoder4,
-                        ui->label_motor_encoder5,
+                        ui->label_ee_fx, ui->label_ee_fy,
+                        ui->label_ee_fz, ui->label_ee_mx,
+                        ui->label_ee_my, ui->label_ee_mz,
                         ui->label_motor_torque1, ui->label_motor_torque2,
                         ui->label_motor_torque3, ui->label_motor_torque4,
                         ui->label_motor_torque5,
                         ui->label_ee_x, ui->label_ee_y, ui->label_ee_z,
                         ui->label_ee_phi, ui->label_ee_theta
                     };
-                    for (int i = 0; i < 20; ++i) {
+                    for (int i = 0; i < 21; ++i) {
                         statusLabels[i]->setText("-");
                     }
                 }
@@ -120,6 +130,11 @@ void MainWindow::Init()
     connect(ctx_->controllerInfoService(), &ControllerInfoService::stateUpdated,
             this, [this](const ControllerStateSnapshot& snapshot) {
                 ui->label_system_state->setText(snapshot.systemStateText);
+
+                if (snapshot.systemState == kSysError
+                    || snapshot.systemState == kSysEstop) {
+                    resetToolUi();
+                }
 
                 // 以控制器实际状态校准 Robot Mode 标志，
                 // 避免控制器端未进入/异常退出 Robot Mode 时 UI 按钮状态锁死
@@ -153,9 +168,6 @@ void MainWindow::Init()
 
                 QLabel* dLLabels[5] = { ui->label_dL_J1, ui->label_dL_J2, ui->label_dL_J3,
                                         ui->label_dL_J4, ui->label_dL_J5 };
-                QLabel* encoderLabels[5] = { ui->label_motor_encoder1, ui->label_motor_encoder2,
-                                             ui->label_motor_encoder3, ui->label_motor_encoder4,
-                                             ui->label_motor_encoder5 };
                 QLabel* torqueLabels[5] = { ui->label_motor_torque1, ui->label_motor_torque2,
                                             ui->label_motor_torque3, ui->label_motor_torque4,
                                             ui->label_motor_torque5 };
@@ -163,7 +175,6 @@ void MainWindow::Init()
 
                 for (int i = 0; i < 5; ++i) {
                     dLLabels[i]->setText(QString::number(frame.dL[i], 'f', 2));
-                    encoderLabels[i]->setText(QString::number(frame.encoder[i], 'f', 0));
                     torqueLabels[i]->setText(QString::number(frame.torque[i], 'f', 0));
                 }
 
@@ -181,6 +192,9 @@ void MainWindow::Init()
                     ui->label_ee_phi->setText("-");
                     ui->label_ee_theta->setText("-");
                 }
+
+                // 力信号与末端位姿有效性无关，始终显示最新换算值
+                ui->label_ee_fz->setText(QString::number(frame.fzNewton, 'f', 2));
             });
 
     // ── 轨迹下发进度 ──────────────────────────────────
@@ -446,6 +460,10 @@ void MainWindow::sendHomeCmd()
 {
     if (!ctx_->connectionService()->isConnected()) {
         QMessageBox::warning(this, "错误", "控制器未连接");
+        return;
+    }
+    if (revolutionRunning_ || rotationRunning_) {
+        QMessageBox::warning(this, "无法回零", "请先停止公转和自转电机再回零");
         return;
     }
 
@@ -1092,6 +1110,7 @@ void MainWindow::on_btn_emergency_stop_clicked()
         paused_ = false;
         ui->btn_pause_resume->setText("PAUSE");
     }
+    resetToolUi();
 
     ui->statusbar->showMessage("Emergency Stop 指令已下发", 3000);
     qDebug() << "Estop command sent to MODBUS[" << kRegEventLevel0
@@ -1115,6 +1134,96 @@ void MainWindow::on_btn_error_reset_clicked()
     ui->statusbar->showMessage("Error Reset 指令已下发", 3000);
     qDebug() << "ErrorReset command sent to MODBUS[" << kRegEventLevel0
              << "] = " << kEventErrorReset;
+}
+
+// ===================================================================
+// End Tool（末端工具）
+// ===================================================================
+
+void MainWindow::updateRevolutionUi()
+{
+    ui->btn_revolution->setText(revolutionRunning_ ? "SHUT DOWN" : "START");
+    ui->label_revolution_status->setText(revolutionRunning_ ? "ON" : "OFF");
+}
+
+void MainWindow::updateRotationUi()
+{
+    ui->btn_rotation->setText(rotationRunning_ ? "SHUT DOWN" : "START");
+    ui->label_rotation_status->setText(rotationRunning_ ? "ON" : "OFF");
+}
+
+void MainWindow::resetToolUi()
+{
+    revolutionRunning_ = false;
+    rotationRunning_ = false;
+    updateRevolutionUi();
+    updateRotationUi();
+}
+
+void MainWindow::on_btn_revolution_clicked()
+{
+    if (revolutionRunning_) {
+        Result ret = ctx_->toolService()->stopRevolution();
+        if (!ret.ok) {
+            QMessageBox::warning(this, "公转停止失败", ret.message);
+            return;
+        }
+        revolutionRunning_ = false;
+        updateRevolutionUi();
+        ui->statusbar->showMessage("公转停止指令已下发", 3000);
+        return;
+    }
+
+    bool ok = false;
+    const float rpm = ui->ledit_revolution_speed->text().toFloat(&ok);
+    if (!ok) {
+        QMessageBox::warning(this, "参数错误", "请输入有效的公转转速");
+        return;
+    }
+
+    Result ret = ctx_->toolService()->startRevolution(rpm);
+    if (!ret.ok) {
+        QMessageBox::warning(this, "公转启动失败", ret.message);
+        return;
+    }
+
+    revolutionRunning_ = true;
+    updateRevolutionUi();
+    ui->statusbar->showMessage(QString("公转启动指令已下发：%1 rpm").arg(rpm), 3000);
+    qDebug() << "Revolution start command sent, rpm =" << rpm;
+}
+
+void MainWindow::on_btn_rotation_clicked()
+{
+    if (rotationRunning_) {
+        Result ret = ctx_->toolService()->stopRotation();
+        if (!ret.ok) {
+            QMessageBox::warning(this, "自转停止失败", ret.message);
+            return;
+        }
+        rotationRunning_ = false;
+        updateRotationUi();
+        ui->statusbar->showMessage("自转停止指令已下发", 3000);
+        return;
+    }
+
+    bool ok = false;
+    const float rpm = ui->ledit_rotation_speed->text().toFloat(&ok);
+    if (!ok) {
+        QMessageBox::warning(this, "参数错误", "请输入有效的自转转速");
+        return;
+    }
+
+    Result ret = ctx_->toolService()->startRotation(rpm);
+    if (!ret.ok) {
+        QMessageBox::warning(this, "自转启动失败", ret.message);
+        return;
+    }
+
+    rotationRunning_ = true;
+    updateRotationUi();
+    ui->statusbar->showMessage(QString("自转启动指令已下发：%1 rpm").arg(rpm), 3000);
+    qDebug() << "Rotation start command sent, rpm =" << rpm;
 }
 
 

@@ -132,7 +132,7 @@ mingw32-make clean
 | 力控配置 | 400–419 | — | 传感器适配、标定滤波、PI 与安全限幅 |
 | 轨迹指令 | 1000–7999 | 50–69 | Trace，10 组 × 100 条 = 1000 条缓冲 |
 | 传感器数据 | 8000+ | 120–122 | 独立传感器 TABLE 环形缓冲（预留） |
-| 状态监控区 | 21000–33289 | — | 机器人与力控状态（header 2 float + 384 帧 × 32 通道） |
+| 状态监控区 | 21000–29449 | — | 机器人状态（header 2 float + 384 帧 × 22 通道） |
 | 系统状态 | — | 5 | 系统状态寄存器 (kRegSystemState) |
 | 运动模式 | — | 6 | 运动模式寄存器 (kRegMotionMode) |
 | 事件 Level 0 | — | 90 | 最高优先级（Estop、ErrorReset） |
@@ -223,11 +223,11 @@ ZMotionDriver (getTable / readModbusReg / readModbusRegs)
 
 ### 状态数据监控
 
-控制器分 10 个伺服周期（1kHz 总线 → 100Hz）把一帧 32 通道状态数据写入 TABLE[21000+] 环形缓冲：TABLE[21000..21001] 为 header（frame_counter 单调递增，0 表示总线初始化未完成、尚未采样），TABLE[21002+] 为帧区（384 帧 × 32 通道，帧号 f 的环形位置 = (f-1) % 384，100Hz 下覆盖 3.84s）。帧内通道：[0-4] dL 支链伸缩量(um)、[5-9] 电机编码器(脉冲)、[10-14] 电机扭矩(‰)、[15-19] 末端位姿 x,y,z(um),phi,theta(角秒)、[20] ee_valid、[21-26] 六轴力/力矩原始值、[27] 滤波法向力(N)、[28] 斜坡后目标力(N)、[29] Z 修正量(um)、[30] 力控模式、[31] 传感器状态。
+控制器每 10 个伺服周期（1kHz 总线 → 100Hz）在一个周期内用一条 TABLE 指令批量采集一帧 22 通道状态数据并写入 TABLE[21000+] 环形缓冲：TABLE[21000..21001] 为 header（frame_counter 单调递增，0 表示总线初始化未完成、尚未采样），TABLE[21002+] 为帧区（384 帧 × 22 通道，帧号 f 的环形位置 = (f-1) % 384，100Hz 下覆盖 3.84s，最后使用 TABLE[29449]）。帧内通道：[0-4] dL 支链伸缩量(um)、[5-9] 电机扭矩(‰)、[10-14] 末端位姿 x,y,z(um),phi,theta(角秒)、[15] ee_valid、[16-21] 六轴力/力矩原始值。编码器及力控派生状态不上传，Qt 中编码器示数固定为 0。
 
 1. 连接成功后自动启动（`ControllerInfoService::startStatusMonitor()`），周期 100 ms（`kStatusUploadIntervalMs`）
 2. Worker 通过 `statusTimer_` 触发 `pollStatusOnce()` → Protocol 的 `readStatusBatch()` 按帧号增量批量读取（首次只取最新一帧；环形区被覆盖时置 `overflow` 并统计 `droppedFrames`）
-3. `StatusSampleFrame` 同时提供力原始值、实际/目标力、Z 修正量、力控模式和传感器状态；现有 UI 显示最新一帧的 dL、编码器、扭矩和末端位姿
+3. `StatusSampleFrame` 提供 dL、扭矩、末端位姿和六轴力原始值；现有 UI 显示最新一帧的 dL、扭矩和末端位姿，编码器标签固定显示 0
 4. 断开连接时 20 个 label 全部复位为 `-`
 
 ### 传感器 TABLE 上传（预留，默认不启动）

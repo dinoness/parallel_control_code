@@ -6,9 +6,11 @@ qt_code/debug/
 qt_code/release/
 matlab_code/trace_generate/data/
 .tmp/
+.kimi_tmp
 
 *.zpj
 *.so
 *.pdf
 *.Debug
 *.Release
+*.zfm

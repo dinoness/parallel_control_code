@@ -7,6 +7,7 @@ AppContext::AppContext()
       traceProtocol_(&driver_),
       controllerInfoProtocol_(&driver_),
       connectionService_(&driver_),
+      toolService_(&driver_),
       motionService_(&driver_, &commandProtocol_, &traceProtocol_),
       trajectoryService_(&driver_, &traceProtocol_, "../../trace_data/"),
       controllerInfoService_(&controllerInfoProtocol_)
@@ -41,6 +42,11 @@ ConnectionService* AppContext::connectionService()
 MotionService* AppContext::motionService()
 {
     return &motionService_;
+}
+
+ToolService* AppContext::toolService()
+{
+    return &toolService_;
 }
 
 TrajectoryService* AppContext::trajectoryService()
