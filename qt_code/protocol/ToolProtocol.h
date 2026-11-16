@@ -12,11 +12,12 @@ public:
 
     Result startRevolution(float rpm);
     Result stopRevolution();
-    Result startRotation(float rpm);
+    Result startRotation(float rpm, int currentMa);
     Result stopRotation();
 
 private:
-    Result startTool(int tableAddr, float rpm, int startEvent);
+    Result startTool(int tableAddr, float rpm, int startEvent,
+                     bool setCurrent, int currentMa);
     Result stopTool(int stopEvent);
 
     ZMotionDriver* driver_;

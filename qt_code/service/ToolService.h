@@ -16,7 +16,7 @@ public:
 
     Result startRevolution(float rpm);
     Result stopRevolution();
-    Result startRotation(float rpm);
+    Result startRotation(float rpm, int currentMa);
     Result stopRotation();
 
 private:

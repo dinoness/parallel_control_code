@@ -2,6 +2,7 @@
 #include "ui_mainwindow.h"
 #include <QDebug>
 #include <QDoubleValidator>
+#include <QIntValidator>
 #include <QMessageBox>
 #include <QString>
 
@@ -73,6 +74,9 @@ void MainWindow::Init()
         new QDoubleValidator(-kMaxToolSpeedRpm, kMaxToolSpeedRpm, 2, this));
     ui->ledit_rotation_speed->setValidator(
         new QDoubleValidator(-kMaxToolSpeedRpm, kMaxToolSpeedRpm, 2, this));
+    ui->ledit_rotation_current->setText(QString::number(kDefaultRotationCurrentMa));
+    ui->ledit_rotation_current->setValidator(
+        new QIntValidator(1, kMaxRotationCurrentMa, this));
     resetToolUi();
 
     updateMotionModeDisplay();
@@ -1214,7 +1218,14 @@ void MainWindow::on_btn_rotation_clicked()
         return;
     }
 
-    Result ret = ctx_->toolService()->startRotation(rpm);
+    bool currentOk = false;
+    const int currentMa = ui->ledit_rotation_current->text().toInt(&currentOk);
+    if (!currentOk) {
+        QMessageBox::warning(this, "参数错误", "请输入有效的自转电流（整数，单位 mA）");
+        return;
+    }
+
+    Result ret = ctx_->toolService()->startRotation(rpm, currentMa);
     if (!ret.ok) {
         QMessageBox::warning(this, "自转启动失败", ret.message);
         return;
@@ -1222,8 +1233,10 @@ void MainWindow::on_btn_rotation_clicked()
 
     rotationRunning_ = true;
     updateRotationUi();
-    ui->statusbar->showMessage(QString("自转启动指令已下发：%1 rpm").arg(rpm), 3000);
-    qDebug() << "Rotation start command sent, rpm =" << rpm;
+    ui->statusbar->showMessage(
+        QString("自转启动指令已下发：%1 rpm，%2 mA").arg(rpm).arg(currentMa), 3000);
+    qDebug() << "Rotation start command sent, rpm =" << rpm
+             << "current(mA) =" << currentMa;
 }
 
 

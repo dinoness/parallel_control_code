@@ -70,8 +70,11 @@ constexpr int kForceZeroOffset      = 10;  // TABLE(410)：Fz 空载原始零位
 // End Tool（末端工具）
 // ===================================================================
 
-constexpr int kRevolutionSpeedTable = 450;  // 公转电机目标转速，单位 rpm
-constexpr int kRotationSpeedTable   = 451;  // 自转电机目标转速，单位 rpm
+constexpr int kRevolutionSpeedTable  = 450;  // 公转电机目标转速，单位 rpm
+constexpr int kRotationSpeedTable    = 451;  // 自转电机目标转速，单位 rpm
+constexpr int kRotationCurrentTable  = 452;  // 自转运行电流，单位 mA
+constexpr int kDefaultRotationCurrentMa = 450;
+constexpr int kMaxRotationCurrentMa = 65535;  // UINT16 上限，实际上限由 EC1 型号决定
 
 // ===================================================================
 // Traj
