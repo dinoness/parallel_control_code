@@ -57,6 +57,8 @@ MODBUS_REG(REG_MOTION_MODE) = motion_mode
 MODBUS_REG(REG_CMD_ERROR) = ERR_OK
 last_cmd_seq = MODBUS_REG(REG_CMD_SEQ)
 
+' 自转输出上电先关闭，避免总线初始化期间残留PWM或使能信号
+TOOL_ROTATION_INIT()
 
 '========================================================
 ' EtherCAT通讯

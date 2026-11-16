@@ -1,7 +1,7 @@
 ' ================================================================
 ' tool_mgr.bas - 末端工具独立控制
 ' 公转：EtherCAT轴5，ATYPE=66，使用DAC连续调速，DAC=0停止。
-' 自转：步进电机硬件输出暂未配置，仅维护命令状态和回零互锁。
+' 自转：OUT0硬件PWM脉冲，OUT4方向，OUT5使能，3200脉冲/转。
 ' ================================================================
 
 GLOBAL SUB TOOL_HANDLE_EVENT(current_state, cur_event)
@@ -66,8 +66,26 @@ GLOBAL SUB TOOL_REVOLUTION_STOP()
 END SUB
 
 
+GLOBAL SUB TOOL_ROTATION_INIT()
+    ' 上电先屏蔽输出，再配置合法的PWM初始频率；频率不能写0。
+    OP(TOOL_ROT_PULSE_OUT, OFF)
+    OP(TOOL_ROT_DIR_OUT, OFF)
+    OP(TOOL_ROT_ENABLE_OUT, OFF)
+    ' OUT0与AXIS6复用；ATYPE=3为编码器轴，设为0才能作为普通PWM输出。
+    ATYPE(TOOL_ROT_AUX_AXIS) = 0
+    PWM_DUTY(TOOL_ROT_PULSE_OUT) = 0
+    PWM_FREQ(TOOL_ROT_PULSE_OUT) = 10.0 * TOOL_ROT_PULSES_PER_REV / 60.0
+    rotation_speed_rpm = 0
+    rotation_running = 0
+    PRINT "[TOOL] 自转PWM初始化完成：OUT0脉冲，OUT4方向，OUT5使能"
+END SUB
+
+
 GLOBAL SUB TOOL_ROTATION_START()
     LOCAL target_rpm
+    LOCAL target_freq
+    LOCAL target_dir
+    LOCAL need_restart
 
     target_rpm = TABLE(TABLE_ROTATION_SPEED)
     IF target_rpm = 0 OR ABS(target_rpm) > MAX_TOOL_SPEED_RPM THEN
@@ -76,19 +94,50 @@ GLOBAL SUB TOOL_ROTATION_START()
         RETURN
     ENDIF
 
+    target_freq = ABS(target_rpm) * TOOL_ROT_PULSES_PER_REV / 60.0
+    target_dir = OFF
+    IF target_rpm > 0 THEN
+        target_dir = ON
+    ENDIF
+
+    ' 首次启动或运行中反转时重新建立方向和PWM；同向调速只更新频率。
+    need_restart = 0
+    IF rotation_running = 0 THEN
+        need_restart = 1
+    ELSEIF (rotation_speed_rpm > 0 AND target_rpm < 0) OR (rotation_speed_rpm < 0 AND target_rpm > 0) THEN
+        PWM_DUTY(TOOL_ROT_PULSE_OUT) = 0
+        OP(TOOL_ROT_PULSE_OUT, OFF)
+        need_restart = 1
+    ENDIF
+
+    IF need_restart = 1 THEN
+        OP(TOOL_ROT_ENABLE_OUT, ON)
+        DELAY(TOOL_ROT_ENABLE_MS)
+        OP(TOOL_ROT_DIR_OUT, target_dir)
+        DELAY(TOOL_ROT_DIR_MS)
+    ENDIF
+
+    ' 必须先设置非零频率，再打开PWM占空比和OUT0输出门控。
+    PWM_FREQ(TOOL_ROT_PULSE_OUT) = target_freq
+    PWM_DUTY(TOOL_ROT_PULSE_OUT) = TOOL_ROT_PWM_DUTY
+    ' OP(TOOL_ROT_PULSE_OUT, ON)
+
     rotation_speed_rpm = target_rpm
-    ' TODO: 后续在此配置步进电机方向、脉冲频率并启动输出。
     rotation_running = 1
     MODBUS_REG(REG_CMD_ERROR) = ERR_OK
-    PRINT "[TOOL] 自转启动命令已接收（硬件输出未配置），rpm =", rotation_speed_rpm
+    PRINT "[TOOL] 自转启动/调速，rpm =", rotation_speed_rpm, "PWM频率Hz =", target_freq
 END SUB
 
 
 GLOBAL SUB TOOL_ROTATION_STOP()
-    ' TODO: 后续在此停止步进电机脉冲输出。
+    ' PWM只能通过占空比为0关闭，不能将PWM频率设为0。
+    PWM_DUTY(TOOL_ROT_PULSE_OUT) = 0
+    OP(TOOL_ROT_PULSE_OUT, OFF)
+    OP(TOOL_ROT_DIR_OUT, OFF)
+    OP(TOOL_ROT_ENABLE_OUT, OFF)
     rotation_speed_rpm = 0
     rotation_running = 0
-    PRINT "[TOOL] 自转停止命令已接收（硬件输出未配置）"
+    PRINT "[TOOL] 自转停止"
 END SUB
 
 

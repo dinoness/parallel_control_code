@@ -11,6 +11,8 @@ matlab_code/trace_generate/data/
 *.zpj
 *.so
 *.pdf
+*.docx
+*.doc
 *.Debug
 *.Release
 *.zfm

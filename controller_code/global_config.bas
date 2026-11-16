@@ -36,6 +36,17 @@ GLOBAL SUB GLOBAL_DEF()
     GLOBAL CONST TOOL_REV_PULSES_PER_REV = 8388608.0
     GLOBAL CONST TOOL_DAC_PER_RPM       = TOOL_REV_PULSES_PER_REV / 60.0
 
+    ' 自转步进电机：ZMC406-V2高速OUT0输出硬件PWM，OUT4方向，OUT5使能。
+    ' 每转3200脉冲，2000rpm对应106666.67Hz，低于OUT0的400kHz硬件上限。
+    GLOBAL CONST TOOL_ROT_PULSES_PER_REV = 3200.0
+    GLOBAL CONST TOOL_ROT_PULSE_OUT      = 0
+    GLOBAL CONST TOOL_ROT_DIR_OUT        = 4
+    GLOBAL CONST TOOL_ROT_ENABLE_OUT     = 5
+    GLOBAL CONST TOOL_ROT_AUX_AXIS       = 6  ' OUT0复用AXIS6，须设为虚拟轴释放普通输出
+    GLOBAL CONST TOOL_ROT_PWM_DUTY       = 0.5
+    GLOBAL CONST TOOL_ROT_ENABLE_MS      = 10
+    GLOBAL CONST TOOL_ROT_DIR_MS         = 1
+
     ' 力传感器适配与控制参数，TABLE 400-419。
     ' 硬件适配层周期更新 valid/sample_count 和 Fz 原始通道；
     ' 第一阶段 enable=1 用于采集显示，PI 增益保持0，不进行闭环力控。
