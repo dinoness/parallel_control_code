@@ -63,6 +63,7 @@ END SUB
 
 ' 统一伺服周期入口：硬件采集和力控适配优先，状态采样常驻
 GLOBAL SUB SERVO_CYCLE()
+    ' 将下面两个函数进行整合==================================================================================================
     FORCE_HARDWARE_SAMPLE()
     FORCE_SAMPLE()
     IF ctrl_running = 1 AND ctrl_paused = 0 THEN
@@ -89,6 +90,7 @@ GLOBAL SUB FORCE_HARDWARE_SAMPLE()
         RETURN
     ENDIF
 
+    ' 简化代码，直接采用AIN==================================================================================================
     IF force_use_ain = 1 THEN
         ' EL3702标准AIN按PDO顺序映射：AIN(32)=CH1 CycleCounter，AIN(33)=CH1 Value。
         ' CycleCounter不变时没有新记录，避免把同一采样重复计数。
@@ -100,6 +102,7 @@ GLOBAL SUB FORCE_HARDWARE_SAMPLE()
 
         fz_raw = AIN(FORCE_AIN_BASE + 1)
         ' AIN可能以0-65535返回INT16原始码，先恢复±10V对应的有符号数值。
+        ' 小于32768就不减了吗==================================================================================================
         IF fz_raw >= 32768 THEN
             fz_raw = fz_raw - 65536
         ENDIF
@@ -124,6 +127,8 @@ GLOBAL SUB FORCE_HARDWARE_SAMPLE()
     TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_SAMPLE_COUNT) = force_hw_sample_count
 END SUB
 
+' 使用了很多常量，为什么不直接用GLOBAL而要用TABLE，有什么考量=============================================================================
+' 以及这些常数现在是否有进行设定========================================================================================================
 ' 力传感器采集适配：硬件层更新采样序号和原始通道，本函数完成断流检测、标定和滤波
 GLOBAL SUB FORCE_SAMPLE()
     LOCAL i, sample_count, alpha
@@ -154,6 +159,7 @@ GLOBAL SUB FORCE_SAMPLE()
             IF alpha <= 0 OR alpha > 1 THEN
                 alpha = 1
             ENDIF
+            ' 寻找合适的滤波方法========================================================================================================
             force_filtered = force_filtered + alpha * (force_normal - force_filtered)
             force_sensor_status = FORCE_SENSOR_VALID
             IF ctrl_running = 1 AND ABS(force_filtered) > TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_MAX_FORCE) THEN
@@ -187,6 +193,7 @@ GLOBAL SUB STATUS_SAMPLE()
         status_tick = 0
         base_addr = TABLE_STATUS_BASE + STATUS_HEADER_FLOATS + status_write_index * STATUS_CHANNELS
 
+        ' 数组的批量操作能否优化，DMCPY？========================================================================================================
         IF ee_valid = 1 THEN
             TABLE(base_addr, MPOS(0)-dl_base(0), MPOS(1)-dl_base(1), MPOS(2)-dl_base(2), MPOS(3)-dl_base(3), MPOS(4)-dl_base(4), DRIVE_TORQUE(0), DRIVE_TORQUE(1), DRIVE_TORQUE(2), DRIVE_TORQUE(3), DRIVE_TORQUE(4), DPOS(6), DPOS(7), DPOS(8), DPOS(9), DPOS(10), 1, force_raw(0), force_raw(1), force_raw(2), force_raw(3), force_raw(4), force_raw(5))
         ELSE
@@ -290,16 +297,20 @@ GLOBAL SUB CTRL_TRACE_STEP()
     ENDIF
 
     ' 阶段等待只查询 IDLE，不在周期中断中阻塞
+    ' 状态的意思是什么========================================================================================================
     IF exec_state = EXEC_WAIT_NORMAL_IDLE THEN
+        ' IDLE的作用是什么========================================================================================================
         IF IDLE(6) AND IDLE(7) AND IDLE(8) AND IDLE(9) AND IDLE(10) THEN
             IF force_sensor_status <> FORCE_SENSOR_VALID THEN
                 CTRL_ABORT(ERR_FORCE_SENSOR_INVALID)
                 RETURN
             ENDIF
+            ' 这些条件都是什么意思：不超时，不过量程，不调整过大，控制变化率===========================================================
             IF TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_CONTACT_TICKS) < 1 OR TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_MAX_FORCE) <= 0 OR TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_MAX_ADJUST) <= 0 OR TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_MAX_ADJ_RATE) <= 0 THEN
                 CTRL_ABORT(ERR_FORCE_PARAM_INVALID)
                 RETURN
             ENDIF
+            ' z修正方向是hyw（估计是用了绝对值+符号）================================================================================
             IF TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_DIRECTION) <> 1 AND TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_DIRECTION) <> -1 THEN
                 CTRL_ABORT(ERR_FORCE_PARAM_INVALID)
                 RETURN
@@ -340,6 +351,7 @@ GLOBAL SUB CTRL_TRACE_STEP()
 
     ' 力控计算每个周期执行，即使本周期没有新 PT 点也更新保持目标
     IF force_active = 1 THEN
+        ' 前面不是判定过了吗，怎么又判定，是否浪费算力=====================================================================
         IF force_sensor_status = FORCE_SENSOR_OVERLIMIT THEN
             CTRL_ABORT(ERR_FORCE_OVERLIMIT)
             RETURN
@@ -360,6 +372,7 @@ GLOBAL SUB CTRL_TRACE_STEP()
             ENDIF
         ENDIF
 
+        ' 这段没看懂======================================================================================================
         IF force_state = FORCE_MODE_HOLD THEN
             target_step = force_ramp_rate * dt_sec
             IF force_target_effective < force_target_cmd THEN
@@ -474,6 +487,7 @@ GLOBAL SUB CTRL_TRACE_STEP()
                 CTRL_ABORT(ERR_UNKNOWN_CMD)
             ENDIF
 
+        ' 需要完整解释这几个状态都是什么意思，这段没看懂============================================================================
         ELSEIF exec_state = EXEC_FORCE THEN
             IF cmd_id = CMD_MOVE_PTABS THEN
                 FOR i = 0 TO 4
