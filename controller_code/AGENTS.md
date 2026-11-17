@@ -133,11 +133,11 @@ SYS_BOOT → SYS_BUS_INIT → SYS_SERVO_READY ⇄ SYS_HOMING → SYS_READY ⇄ S
 
 普通运动任务之间互斥，同一时间只能有一个运动任务在运行，暂停/恢复通过 `PAUSETASK`/`RESUMETASK` 实现。
 CTRL 混合轨迹不是 RUNTASK 任务，也不单独申请中断。`STATUS_INIT()` 只注册一次 TASK_CTRL 周期中断，
-`SERVO_CYCLE()` 每周期依次执行 FORCE_HARDWARE_SAMPLE、FORCE_SAMPLE，在 ctrl_running=1 且未暂停时执行 CTRL_TRACE_STEP，最后始终执行 STATUS_SAMPLE。
+`SERVO_CYCLE()` 每周期先执行 FORCE_SAMPLE（硬件采集与适配合并为同一函数，Fz 原始值直写 force_raw(2)，不绕 TABLE），在 ctrl_running=1 且未暂停时执行 CTRL_TRACE_STEP，最后始终执行 STATUS_SAMPLE。
 CTRL_MOVE() 启动完整混合轨迹；普通 MOVE/MOVEABS/PT/DELAY 与力控段均由 CTRL_TRACE_STEP 消费，不与 TRAJ_MOVE 同时运行。
 FORCE_CFG/FORCE_OFF 显式划分力控段，阶段切换通过非阻塞 IDLE 检查；CMD_NONE 等待所有运动结束后才写 EVENT_CTRL_DONE。
 CTRL_MOVE_PAUSE()/CTRL_MOVE_RESUME() 同时使用 MOVE_PAUSE/MOVE_RESUME 暂停运动缓冲，不能对 TASK_CTRL 使用 PAUSETASK/RESUMETASK。
-力传感器通过 TABLE 400-419 适配。第一阶段接入 EK1100（节点6）后的 EL3702（节点7）CH1：优先标准 AIN，AIN(32)=CH1 CycleCounter、AIN(33)=CH1 模拟量（按有符号 INT16 处理），否则从默认8字节 PDO 读取到 TABLE 420-427；只采集 Fz，PI 增益为 0，理论比例和零位待实测校准。
+力传感器参数经 TABLE 400-419 适配（Qt 仅读 409/410 做 Fz 换算；401/402/405 为 10ms 低频调试镜像）。第一阶段接入 EK1100（节点6）后的 EL3702（节点7）CH1：仅使用标准 AIN，只读 AIN(33)=CH1 模拟量（EL3702 原生有符号 INT16，ZMC 侧若按无符号返回则由算术回绕恢复，无分支）；总线周期 1ms 与伺服周期 1:1，不读 CycleCounter；EL3702 超采样系数须为 1。FORCE_SAMPLE 分每周期热路径（采集+标定滤波+过力）和 10ms 低频维护（NODE_STATUS/ENABLE/断流检测/状态细分/调试镜像，借 status_tick=5 触发）。只采集 Fz，PI 增益为 0，理论比例和零位待实测校准。
 状态采样写入 TABLE 环形区（TABLE_STATUS_BASE=21000 起，header 2 + 384 帧 × 22 通道），包含 dL、扭矩、末端位姿和六轴原始力；编码器及力控派生状态不上传。
 
 ### 运动学系统

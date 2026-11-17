@@ -25,24 +25,19 @@ GLOBAL SUB Ecat_Init()
 
         ' -------------EL3702采集资源映射-------------
         ' 节点6为EK1100，节点7为EL3702；两者轴数均为0，不参与下方6个电机轴映射。
-        force_use_ain = 0
-        IF NODE_INFO(BUS_SLOT, FORCE_NODE, 12) >= 2 THEN
-            NODE_AIO(BUS_SLOT, FORCE_NODE, 3) = FORCE_AIN_BASE
-            IF NODE_AIO(BUS_SLOT, FORCE_NODE, 3) = FORCE_AIN_BASE THEN
-                force_use_ain = 1
-                PRINT "EL3702使用标准AIN，起始通道："FORCE_AIN_BASE
-            ENDIF
+        ' 仅接受标准AIN映射，映射失败时禁止继续使用无效采样数据。
+        IF NODE_INFO(BUS_SLOT, FORCE_NODE, 12) < 2 THEN
+            bus_initstate = 0
+            PRINT "EL3702标准AIN通道不足，请检查PDO配置"
+            RETURN
         ENDIF
-
-        ' 无标准AIN时仅接受默认n=1的8字节PDO，防止其他布局造成偏移误读。
-        IF force_use_ain = 0 THEN
-            IF NODE_INFO(BUS_SLOT, FORCE_NODE, 14) <> FORCE_PDO_BYTES THEN
-                bus_initstate = 0
-                PRINT "EL3702输入PDO不是8字节，请检查超采样和PDO配置"
-                RETURN
-            ENDIF
-            PRINT "EL3702使用PDO原始字节，TABLE起始："FORCE_PDO_TABLE_BEGIN
+        NODE_AIO(BUS_SLOT, FORCE_NODE, 3) = FORCE_AIN_BASE
+        IF NODE_AIO(BUS_SLOT, FORCE_NODE, 3) <> FORCE_AIN_BASE THEN
+            bus_initstate = 0
+            PRINT "EL3702标准AIN映射失败"
+            RETURN
         ENDIF
+        PRINT "EL3702使用标准AIN，起始通道："FORCE_AIN_BASE
 
         ' -------------映射轴号-------------
         ' 当前的情况是每个驱动器是一个设备，每个驱动器下有一个轴

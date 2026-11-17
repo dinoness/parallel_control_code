@@ -9,7 +9,7 @@
 '    FORCE_CFG 和 FORCE_OFF。CMD_NONE 前必须显式 FORCE_OFF。
 ' 4. 力控段内部统一维护 nominal_pos，最终使用 ticks=1 的 MOVE_PTABS 输出
 '    nominal_pos + adj_pos，避免相对 PT 重复累加修正量。
-' 5. EL3702 通过 TABLE 400-419 适配，第一阶段仅采集显示且 PI 增益为0；
+' 5. EL3702 通过标准 AIN 和 TABLE 400-419 适配，第一阶段仅采集显示且 PI 增益为0；
 '    未接入硬件、数据断流或过力时禁止进入/继续力控。当前仅对 Z 施加增量式 PI 修正。
 ' ================================================================
 
@@ -45,6 +45,8 @@ GLOBAL SUB STATUS_INIT()
     force_sensor_status = FORCE_SENSOR_DISABLED
     force_last_sample_count = -1
     force_stale_ticks = 0
+    force_hw_valid = 0
+    force_enabled = 0
     FOR i = 0 TO 4
         nominal_pos(i) = 0
         adj_pos(i) = 0
@@ -54,17 +56,16 @@ GLOBAL SUB STATUS_INIT()
     NEXT
 
     ' 第一阶段只采集和显示：启用硬件适配，PI增益保持0；比例是理论初值，需实测校准。
-    TABLE(TABLE_FORCE_CFG_BEGIN, 1, 0, 0, 0, 0, 0, 0, 0, 0, FORCE_FZ_DEFAULT_SCALE, 0.0, 1.0, 0.0, 0.0, 50.0, 5000.0, 1000.0, 5, 1.0, 10)
+    ' 末位断流阈值单位为 10ms（断流检测已降频到 10ms 低频维护段执行）
+    TABLE(TABLE_FORCE_CFG_BEGIN, 1, 0, 0, 0, 0, 0, 0, 0, 0, FORCE_FZ_DEFAULT_SCALE, 0.0, 1.0, 0.0, 0.0, 50.0, 5000.0, 1000.0, 5, 1.0, 1)
 
     TABLE(TABLE_STATUS_BASE) = 0
     TABLE(TABLE_STATUS_BASE + 1) = 0
     INT_CYCLE(1, TASK_CTRL, SERVO_CYCLE)
 END SUB
 
-' 统一伺服周期入口：硬件采集和力控适配优先，状态采样常驻
+' 统一伺服周期入口：力传感器采集与适配优先，状态采样常驻
 GLOBAL SUB SERVO_CYCLE()
-    ' 将下面两个函数进行整合==================================================================================================
-    FORCE_HARDWARE_SAMPLE()
     FORCE_SAMPLE()
     IF ctrl_running = 1 AND ctrl_paused = 0 THEN
         CTRL_TRACE_STEP()
@@ -80,91 +81,63 @@ GLOBAL SUB DL_BASE_CAPTURE()
     NEXT
 END SUB
 
-' EL3702 CH1硬件采集：只更新Fz原始值，其余五轴保持0。
-' PDO每个TABLE元素保存1字节，小端拼接；CycleCounter不变时不推进采样序号。
-GLOBAL SUB FORCE_HARDWARE_SAMPLE()
-    LOCAL cycle_counter, fz_raw
-
-    IF NODE_STATUS(BUS_SLOT, FORCE_NODE) <> 1 THEN
-        TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_VALID) = 0
-        RETURN
-    ENDIF
-
-    ' 简化代码，直接采用AIN==================================================================================================
-    IF force_use_ain = 1 THEN
-        ' EL3702标准AIN按PDO顺序映射：AIN(32)=CH1 CycleCounter，AIN(33)=CH1 Value。
-        ' CycleCounter不变时没有新记录，避免把同一采样重复计数。
-        cycle_counter = AIN(FORCE_AIN_BASE)
-        IF cycle_counter = force_last_cycle_counter THEN
-            RETURN
-        ENDIF
-        force_last_cycle_counter = cycle_counter
-
-        fz_raw = AIN(FORCE_AIN_BASE + 1)
-        ' AIN可能以0-65535返回INT16原始码，先恢复±10V对应的有符号数值。
-        ' 小于32768就不减了吗==================================================================================================
-        IF fz_raw >= 32768 THEN
-            fz_raw = fz_raw - 65536
-        ENDIF
-    ELSE
-        NODE_PDO_RDBUFF(BUS_SLOT, FORCE_NODE, 0, FORCE_PDO_TABLE_BEGIN, FORCE_PDO_BYTES)
-        cycle_counter = TABLE(FORCE_PDO_TABLE_BEGIN) + TABLE(FORCE_PDO_TABLE_BEGIN + 1) * 256
-        IF cycle_counter = force_last_cycle_counter THEN
-            RETURN
-        ENDIF
-        force_last_cycle_counter = cycle_counter
-
-        fz_raw = TABLE(FORCE_PDO_TABLE_BEGIN + 2) + TABLE(FORCE_PDO_TABLE_BEGIN + 3) * 256
-        IF fz_raw >= 32768 THEN
-            fz_raw = fz_raw - 65536
-        ENDIF
-    ENDIF
-
-    force_hw_sample_count = force_hw_sample_count + 1
-    TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_VALID) = 1
-    TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_RAW_BEGIN + 2) = fz_raw
-    ' 原始值就绪后最后推进序号，FORCE_SAMPLE据此识别新采样并检测断流。
-    TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_SAMPLE_COUNT) = force_hw_sample_count
-END SUB
-
-' 使用了很多常量，为什么不直接用GLOBAL而要用TABLE，有什么考量=============================================================================
-' 以及这些常数现在是否有进行设定========================================================================================================
-' 力传感器采集适配：硬件层更新采样序号和原始通道，本函数完成断流检测、标定和滤波
+' 力传感器采集与适配（单函数，分高频热路径和 10ms 低频维护两段）。
+' 热路径（每伺服周期）：AIN(33) 直读 Fz 原始值 -> 无分支补码转换 -> 标定滤波一条语句 -> 过力判断。
+' 低频维护（借用 STATUS_SAMPLE 的分频计数，status_tick=5 触发，错开 tick=9 的状态帧写周期）：
+'   NODE_STATUS、ENABLE 读取、断流检测、状态细分、TABLE(401/402/405) 调试镜像。
+' 总线周期 1ms 与伺服周期 1:1，每周期必有新记录，不再读 CycleCounter。
+' 参数保留在 TABLE 400-419 以便上位机/在线调参，不用 GLOBAL CONST。
 GLOBAL SUB FORCE_SAMPLE()
-    LOCAL i, sample_count, alpha
+    LOCAL fz_raw
 
-    IF TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_ENABLE) = 0 THEN
-        force_sensor_status = FORCE_SENSOR_DISABLED
-        force_stale_ticks = 0
-    ELSEIF TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_VALID) = 0 THEN
-        force_sensor_status = FORCE_SENSOR_INVALID
-        force_stale_ticks = 0
-    ELSE
-        sample_count = TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_SAMPLE_COUNT)
-        IF sample_count = force_last_sample_count THEN
+    ' ---- 10ms 低频维护 ----
+    IF status_tick = 5 THEN
+        ' 节点在线状态，10ms 响应
+        IF NODE_STATUS(BUS_SLOT, FORCE_NODE) = 1 THEN
+            force_hw_valid = 1
+        ELSE
+            force_hw_valid = 0
+        ENDIF
+        ' 适配启停参数，10ms 响应
+        IF TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_ENABLE) = 0 THEN
+            force_enabled = 0
+        ELSE
+            force_enabled = 1
+        ENDIF
+        ' 断流检测：10ms 内采样序号未前进则累计一拍；TABLE(419) 阈值单位为 10ms
+        IF force_hw_sample_count = force_last_sample_count THEN
             force_stale_ticks = force_stale_ticks + 1
         ELSE
-            force_last_sample_count = sample_count
+            force_last_sample_count = force_hw_sample_count
             force_stale_ticks = 0
         ENDIF
-
-        IF force_stale_ticks > TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_STALE_TICKS) THEN
+        ' 调试镜像：仅供 ZDevelop 观察，控制路径不依赖这些 TABLE
+        TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_VALID) = force_hw_valid
+        TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_SAMPLE_COUNT) = force_hw_sample_count
+        TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_RAW_BEGIN + 2) = force_raw(2)
+        ' 状态细分；OVERLIMIT 由热路径置位且随即触发 CTRL_ABORT，此处覆盖回 VALID 无控制影响
+        IF force_enabled = 0 THEN
+            force_sensor_status = FORCE_SENSOR_DISABLED
+        ELSEIF force_hw_valid = 0 THEN
+            force_sensor_status = FORCE_SENSOR_INVALID
+        ELSEIF force_stale_ticks > TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_STALE_TICKS) THEN
             force_sensor_status = FORCE_SENSOR_STALE
         ELSE
-            FOR i = 0 TO 5
-                force_raw(i) = TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_RAW_BEGIN + i)
-            NEXT
-            force_normal = (force_raw(2) - TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_ZERO)) * TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_SCALE)
-            alpha = TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_FILTER_ALPHA)
-            IF alpha <= 0 OR alpha > 1 THEN
-                alpha = 1
-            ENDIF
-            ' 寻找合适的滤波方法========================================================================================================
-            force_filtered = force_filtered + alpha * (force_normal - force_filtered)
             force_sensor_status = FORCE_SENSOR_VALID
-            IF ctrl_running = 1 AND ABS(force_filtered) > TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_MAX_FORCE) THEN
-                force_sensor_status = FORCE_SENSOR_OVERLIMIT
-            ENDIF
+        ENDIF
+    ENDIF
+
+    ' ---- 热路径：每伺服周期执行 ----
+    IF force_enabled = 1 AND force_hw_valid = 1 THEN
+        ' 无分支补码转换：AIN 无论按有符号还是无符号返回 16 位原始码都正确
+        fz_raw = (AIN(FORCE_AIN_BASE + 1) + 32768) MOD 65536 - 32768
+        force_raw(2) = fz_raw
+        force_hw_sample_count = force_hw_sample_count + 1
+        ' 标定 + 一阶低通合并为一条；alpha 的合法范围 (0,1] 由参数配置侧保证
+        force_filtered = force_filtered + TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_FILTER_ALPHA) * ((fz_raw - TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_ZERO)) * TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_SCALE) - force_filtered)
+        ' 传感器启用时，过力保护覆盖 CTRL 的普通段和力控段
+        IF ctrl_running = 1 AND ABS(force_filtered) > TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_MAX_FORCE) THEN
+            force_sensor_status = FORCE_SENSOR_OVERLIMIT
         ENDIF
     ENDIF
 END SUB
@@ -193,7 +166,6 @@ GLOBAL SUB STATUS_SAMPLE()
         status_tick = 0
         base_addr = TABLE_STATUS_BASE + STATUS_HEADER_FLOATS + status_write_index * STATUS_CHANNELS
 
-        ' 数组的批量操作能否优化，DMCPY？========================================================================================================
         IF ee_valid = 1 THEN
             TABLE(base_addr, MPOS(0)-dl_base(0), MPOS(1)-dl_base(1), MPOS(2)-dl_base(2), MPOS(3)-dl_base(3), MPOS(4)-dl_base(4), DRIVE_TORQUE(0), DRIVE_TORQUE(1), DRIVE_TORQUE(2), DRIVE_TORQUE(3), DRIVE_TORQUE(4), DPOS(6), DPOS(7), DPOS(8), DPOS(9), DPOS(10), 1, force_raw(0), force_raw(1), force_raw(2), force_raw(3), force_raw(4), force_raw(5))
         ELSE
@@ -297,9 +269,7 @@ GLOBAL SUB CTRL_TRACE_STEP()
     ENDIF
 
     ' 阶段等待只查询 IDLE，不在周期中断中阻塞
-    ' 状态的意思是什么========================================================================================================
     IF exec_state = EXEC_WAIT_NORMAL_IDLE THEN
-        ' IDLE的作用是什么========================================================================================================
         IF IDLE(6) AND IDLE(7) AND IDLE(8) AND IDLE(9) AND IDLE(10) THEN
             IF force_sensor_status <> FORCE_SENSOR_VALID THEN
                 CTRL_ABORT(ERR_FORCE_SENSOR_INVALID)
@@ -351,11 +321,8 @@ GLOBAL SUB CTRL_TRACE_STEP()
 
     ' 力控计算每个周期执行，即使本周期没有新 PT 点也更新保持目标
     IF force_active = 1 THEN
-        ' 前面不是判定过了吗，怎么又判定，是否浪费算力=====================================================================
-        IF force_sensor_status = FORCE_SENSOR_OVERLIMIT THEN
-            CTRL_ABORT(ERR_FORCE_OVERLIMIT)
-            RETURN
-        ELSEIF force_sensor_status <> FORCE_SENSOR_VALID THEN
+        ' 过力已在函数入口统一拦截，此处只拦对力控段致命的 INVALID/STALE
+        IF force_sensor_status <> FORCE_SENSOR_VALID THEN
             CTRL_ABORT(ERR_FORCE_SENSOR_INVALID)
             RETURN
         ENDIF

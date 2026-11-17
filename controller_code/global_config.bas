@@ -48,16 +48,17 @@ GLOBAL SUB GLOBAL_DEF()
     GLOBAL CONST TOOL_ROT_DIR_MS         = 1
 
     ' 力传感器适配与控制参数，TABLE 400-419。
-    ' 硬件适配层周期更新 valid/sample_count 和 Fz 原始通道；
+    ' 控制路径只读参数（enable/标定/滤波/PI/限幅/阈值）；valid/sample_count/原始值
+    ' 仅为 10ms 低频调试镜像（供 ZDevelop 观察），控制与断流检测走全局变量。
     ' 第一阶段 enable=1 用于采集显示，PI 增益保持0，不进行闭环力控。
     GLOBAL CONST TABLE_FORCE_CFG_BEGIN   = 400
-    GLOBAL CONST FORCE_CFG_ENABLE        = 0   ' 1=启用传感器适配层
-    GLOBAL CONST FORCE_CFG_VALID         = 1   ' 1=硬件数据有效
-    GLOBAL CONST FORCE_CFG_SAMPLE_COUNT  = 2   ' 单调递增采样序号，用于断流检测
-    GLOBAL CONST FORCE_CFG_RAW_BEGIN     = 3   ' 3-8: Fx,Fy,Fz,Mx,My,Mz 原始值
+    GLOBAL CONST FORCE_CFG_ENABLE        = 0   ' 1=启用传感器适配层（10ms 刷新进 force_enabled）
+    GLOBAL CONST FORCE_CFG_VALID         = 1   ' 调试镜像：1=节点在线（10ms 刷新）
+    GLOBAL CONST FORCE_CFG_SAMPLE_COUNT  = 2   ' 调试镜像：采样序号（10ms 刷新）
+    GLOBAL CONST FORCE_CFG_RAW_BEGIN     = 3   ' 3-8: Fx,Fy,Fz,Mx,My,Mz 原始值（仅 405=Fz 作调试镜像，10ms 刷新）
     GLOBAL CONST FORCE_CFG_SCALE         = 9   ' Fz 原始值到 N 的比例，可带符号
     GLOBAL CONST FORCE_CFG_ZERO          = 10  ' Fz 空载原始零位
-    GLOBAL CONST FORCE_CFG_FILTER_ALPHA  = 11  ' 一阶低通系数，0<alpha<=1
+    GLOBAL CONST FORCE_CFG_FILTER_ALPHA  = 11  ' 一阶低通系数，合法范围 (0,1] 由参数配置侧保证
     GLOBAL CONST FORCE_CFG_KP            = 12  ' 增量式 PI 比例系数
     GLOBAL CONST FORCE_CFG_KI            = 13  ' 增量式 PI 积分系数
     GLOBAL CONST FORCE_CFG_MAX_FORCE     = 14  ' 过力保护阈值(N)
@@ -65,15 +66,15 @@ GLOBAL SUB GLOBAL_DEF()
     GLOBAL CONST FORCE_CFG_MAX_ADJ_RATE  = 16  ' 修正速度限幅(um/s)
     GLOBAL CONST FORCE_CFG_CONTACT_TICKS = 17  ' 接触阈值连续成立周期数
     GLOBAL CONST FORCE_CFG_DIRECTION     = 18  ' Z 修正方向，只能为 +1 或 -1
-    GLOBAL CONST FORCE_CFG_STALE_TICKS   = 19  ' 数据允许不更新的最大周期数
+    GLOBAL CONST FORCE_CFG_STALE_TICKS   = 19  ' 断流阈值，单位 10ms（断流检测在 10ms 低频段执行）
 
     ' 总线节点0-5为驱动器，节点6为EK1100，节点7为EL3702；Fz 接 EL3702 CH1。
-    ' 优先映射标准 AIN；无法识别为 AIN 时读取默认 n=1 的8字节输入PDO：
-    ' CH1 CycleCounter(2字节) + CH1 Value(2字节) + CH2 CycleCounter + CH2 Value。
+    ' 仅使用标准 AIN。总线周期 1ms 与伺服周期 1:1，每周期必有新记录，不读 CycleCounter；
+    ' EL3702 原生输出有符号 INT16（±10V 对应 ±32767），ZMC 侧 AIN 若按无符号返回，
+    ' 由 FORCE_SAMPLE 用算术回绕恢复，无需端子侧配置。
+    ' 注意：EL3702 为超采样端子，超采样系数须为 1，否则 AIN(33) 只是块内第一个（最旧）采样。
     GLOBAL CONST FORCE_NODE              = 7
-    GLOBAL CONST FORCE_AIN_BASE          = 32  ' AIN(32)=CH1计数器，AIN(33)=CH1模拟量；起始编号须为8的倍数
-    GLOBAL CONST FORCE_PDO_TABLE_BEGIN   = 420 ' 420-427，每个TABLE保存1个PDO字节
-    GLOBAL CONST FORCE_PDO_BYTES         = 8
+    GLOBAL CONST FORCE_AIN_BASE          = 32  ' AIN(33)=CH1模拟量；AIN(32)=CycleCounter 不再读取；起始编号须为8的倍数
     GLOBAL CONST FORCE_FZ_FULL_SCALE_N   = 49.03325 ' 5kgf，仅作理论标定初值
     GLOBAL CONST FORCE_ADC_FULL_SCALE    = 32768    ' EL3702 ±10V 对应有符号16位满量程
     GLOBAL CONST FORCE_FZ_DEFAULT_SCALE  = FORCE_FZ_FULL_SCALE_N / FORCE_ADC_FULL_SCALE

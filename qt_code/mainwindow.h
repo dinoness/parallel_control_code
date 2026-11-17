@@ -3,6 +3,10 @@
 
 #include <QMainWindow>
 
+#include <QElapsedTimer>
+#include <QFile>
+#include <QTextStream>
+
 #include "./app/AppContext.h"
 
 QT_BEGIN_NAMESPACE
@@ -82,6 +86,7 @@ private slots:
     void on_btn_xlsx_to_dat_clicked();
     void on_btn_robo_mode_in_clicked();
     void on_btn_robo_mode_out_clicked();
+    void on_btn_data_save_clicked();
 
 private:
     // ── 模式切换 ──────────────────────────────────────
@@ -117,6 +122,9 @@ private:
     void sendResume();
     bool paused_ = false;
 
+    // ── 数据保存 ──────────────────────────────────────
+    void stopDataSave();  // 停止录制并复位 UI（关闭文件、按钮/状态复原）
+
     Ui::MainWindow *ui;
     AppContext* ctx_;
 
@@ -125,6 +133,12 @@ private:
     bool robotModeActive_ = false;
     bool revolutionRunning_ = false;
     bool rotationRunning_ = false;
+
+    // ── 数据保存 ──────────────────────────────────────
+    bool dataSaving_ = false;
+    QFile dataSaveFile_;
+    QTextStream dataSaveStream_;
+    QElapsedTimer dataSaveFlushTimer_;  // flush 节流：每秒落盘一次
 };
 
 #endif // MAINWINDOW_H

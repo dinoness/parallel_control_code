@@ -2,6 +2,7 @@ qt_code/build/
 qt_code/*.pro.user.*
 qt_code/*.pro.user
 qt_code/trace_data/
+qt_code/data/
 qt_code/debug/
 qt_code/release/
 matlab_code/trace_generate/data/

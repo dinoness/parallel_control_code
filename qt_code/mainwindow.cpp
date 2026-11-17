@@ -1,9 +1,12 @@
 #include "mainwindow.h"
 #include "ui_mainwindow.h"
+#include <QDateTime>
 #include <QDebug>
+#include <QDir>
 #include <QDoubleValidator>
 #include <QIntValidator>
 #include <QMessageBox>
+#include <QRegularExpression>
 #include <QString>
 
 MainWindow::MainWindow(AppContext* context, QWidget *parent)
@@ -102,6 +105,11 @@ void MainWindow::Init()
                     robotModeActive_ = false;
                     updateRobotModeButtons();
 
+                    // 断线时停止数据录制，避免文件句柄悬挂
+                    if (dataSaving_) {
+                        stopDataSave();
+                    }
+
                     // 断线时复位运动模式相关 UI 状态，
                     // 避免在模式中断线后重连时 ENTER 全部锁死、无法退出
                     resetMotionModeUi();
@@ -198,7 +206,35 @@ void MainWindow::Init()
                 }
 
                 // 力信号与末端位姿有效性无关，始终显示最新换算值
-                ui->label_ee_fz->setText(QString::number(frame.fzNewton, 'f', 2));
+                ui->label_ee_fz->setText(QString::number(frame.fzNewton, 'f', 3));
+
+                // ── 数据保存：录制开启时写入批次中的全部帧 ──
+                if (dataSaving_) {
+                    for (const StatusSampleFrame& f : batch.frames) {
+                        dataSaveStream_ << f.frameCounter << ','
+                                        << (f.frameCounter * 10) << ','  // 100Hz 采样，帧号×10=相对毫秒
+                                        << QString::number(f.fzNewton, 'f', 3) << ',';
+                        for (int i = 0; i < 5; ++i) {
+                            dataSaveStream_ << QString::number(f.dL[i], 'f', 3) << ',';
+                        }
+                        for (int i = 0; i < 5; ++i) {
+                            dataSaveStream_ << QString::number(f.torque[i], 'f', 3) << ',';
+                        }
+                        if (f.eeValid) {
+                            for (int i = 0; i < 5; ++i) {
+                                dataSaveStream_ << QString::number(f.ee[i], 'f', 3) << ',';
+                            }
+                        } else {
+                            dataSaveStream_ << ",,,,,";  // 位姿无效时留空
+                        }
+                        dataSaveStream_ << (f.eeValid ? 1 : 0) << '\n';
+                    }
+                    // flush 节流：每秒强制落盘一次，平衡安全性与磁盘 IO
+                    if (dataSaveFlushTimer_.elapsed() >= 1000) {
+                        dataSaveStream_.flush();
+                        dataSaveFlushTimer_.restart();
+                    }
+                }
             });
 
     // ── 轨迹下发进度 ──────────────────────────────────
@@ -1262,3 +1298,74 @@ void MainWindow::on_btn_robo_mode_out_clicked()
     exitRobotMode();
 }
 
+
+
+// ── 数据保存 ──────────────────────────────────────────
+// 保存目录固定为 qt_code/data，文件名 = ledit 内容 + 开启时刻时间戳 + .csv
+static const char* kDataSaveDir = "D:/Craft/Project/parallel_controller/qt_code/data";
+
+void MainWindow::on_btn_data_save_clicked()
+{
+    if (dataSaving_) {
+        // 再次按下：停止录制
+        stopDataSave();
+        return;
+    }
+
+    // 文件名：ledit 内容 + 开启采集时刻时间戳，避免重名覆盖
+    QString baseName = ui->ledit_data_save_file->text().trimmed();
+    if (baseName.isEmpty()) {
+        QMessageBox::warning(this, "错误", "请先输入文件名");
+        return;
+    }
+    // 剔除 Windows 非法文件名字符
+    static const QRegularExpression kInvalidChars(R"([\\/:*?"<>|])");
+    if (baseName.contains(kInvalidChars)) {
+        QMessageBox::warning(this, "错误", "文件名包含非法字符: \\ / : * ? \" < > |");
+        return;
+    }
+
+    QDir dir(kDataSaveDir);
+    if (!dir.exists() && !dir.mkpath(".")) {
+        QMessageBox::critical(this, "错误",
+                              QString("无法创建保存目录: %1").arg(kDataSaveDir));
+        return;
+    }
+
+    const QString filePath =
+        dir.filePath(baseName + "_" + QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss") + ".csv");
+
+    dataSaveFile_.setFileName(filePath);
+    if (!dataSaveFile_.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        QMessageBox::critical(this, "错误",
+                              QString("无法打开文件:\n%1").arg(filePath));
+        return;
+    }
+    dataSaveStream_.setDevice(&dataSaveFile_);
+
+    // 表头：列为 帧号 / 相对时间 / Fz(N) / dL(um) / 扭矩(‰) / 末端位姿(um, 角秒) / 位姿有效标志
+    dataSaveStream_ << "frame_counter,time_ms,fz_N,"
+                       "dL1_um,dL2_um,dL3_um,dL4_um,dL5_um,"
+                       "torque1_permille,torque2_permille,torque3_permille,torque4_permille,torque5_permille,"
+                       "ee_x_um,ee_y_um,ee_z_um,ee_phi_arcsec,ee_theta_arcsec,ee_valid\n";
+    dataSaveStream_.flush();
+
+    dataSaving_ = true;
+    dataSaveFlushTimer_.start();
+    ui->btn_data_save->setText("STOP");
+    ui->label_data_save_status->setText("ON");
+    ui->statusbar->showMessage(QString("数据保存中: %1").arg(filePath));
+}
+
+void MainWindow::stopDataSave()
+{
+    dataSaving_ = false;
+    if (dataSaveFile_.isOpen()) {
+        dataSaveStream_.flush();
+        dataSaveFile_.close();
+        ui->statusbar->showMessage(
+            QString("数据已保存: %1").arg(dataSaveFile_.fileName()), 5000);
+    }
+    ui->btn_data_save->setText("START");
+    ui->label_data_save_status->setText("OFF");
+}

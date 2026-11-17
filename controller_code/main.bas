@@ -29,9 +29,10 @@ GLOBAL revolution_speed_rpm
 GLOBAL rotation_speed_rpm
 
 ' EL3702 硬件采集状态；仅在周期中断中更新，不新增任务
-GLOBAL force_use_ain            ' 1=标准AIN，0=PDO原始字节
-GLOBAL force_hw_sample_count    ' 硬件新采样序号，写入TABLE(402)
-GLOBAL force_last_cycle_counter ' PDO路径上一次CH1 CycleCounter
+' 采样数据直写全局变量，TABLE(401/402/405) 仅作 10ms 低频调试镜像
+GLOBAL force_hw_sample_count    ' 硬件采样序号（每伺服周期+1，供断流检测）
+GLOBAL force_hw_valid           ' 硬件数据有效标志（节点在线即有效，10ms 刷新）
+GLOBAL force_enabled            ' 适配启停缓存（跟随 TABLE(400)，10ms 刷新）
 
 GLOBAL_DEF()
 REG_CLEAR()
@@ -47,9 +48,9 @@ revolution_running = 0
 rotation_running = 0
 revolution_speed_rpm = 0
 rotation_speed_rpm = 0
-force_use_ain = 0
 force_hw_sample_count = 0
-force_last_cycle_counter = -1
+force_hw_valid = 0
+force_enabled = 0
 
 MODBUS_REG(REG_SYSTEM_STATE) = system_state
 MODBUS_REG(REG_MOTION_MODE) = motion_mode

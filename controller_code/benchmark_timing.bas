@@ -1,5 +1,5 @@
 ' 临时基准测试：不执行运动，不修改控制参数
-' TABLE 900-915 为预留测试地址
+' TABLE 900-959 为预留测试地址（452-999 预留区内）
 ' 所有测试循环均包含与空循环相同的两次赋值，使用 t_empty 扣除公共开销
 
 GLOBAL SUB BENCHMARK()
@@ -133,5 +133,201 @@ GLOBAL SUB BENCHMARK()
     TABLE(900,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0)
 
     PRINT "基准测试完成"
+    PRINT "=================================="
+END SUB
+
+' ================================================================
+' 优化方向基准测试：RUNTASK 10, BENCHMARK_OPT()
+' 对应四项优化疑问：
+'   问题1：力控参数逐条 TABLE 读 vs 批量缓存 vs 编译期常量
+'   问题2：状态帧一句话直写 vs 数组填充+DMCPY 两句拷贝
+'   问题3：GLOBAL SUB 调用本身的开销（评估函数合并收益）
+'   问题4：GLOBAL/LOCAL 变量读与 IF 判定开销（评估冗余判定清理收益）
+' 注意：DMCPY 段若报语法/指令错误，注释对应循环即可，不影响其余测试
+' ================================================================
+
+' 空调用基准用空过程
+GLOBAL SUB BENCH_EMPTY_SUB()
+END SUB
+
+GLOBAL SUB BENCHMARK_OPT()
+    DIM bench_a(16), bench_b(16)
+    GLOBAL bench_g
+    GLOBAL CONST BENCH_K = 50.0
+    LOCAL i, n, bench_local
+    LOCAL t_empty, t_test
+    LOCAL bench_value, bench_addr
+
+    n = 10000
+    bench_g = 1
+    bench_local = 1
+
+    PRINT "=================================="
+    PRINT "优化方向基准测试，循环次数: ", n
+
+    ' 0. 公共空循环基准
+    TIME_TICKUS = 0
+    FOR i = 0 TO n - 1
+        bench_value = i
+        bench_addr = i MOD 16
+    NEXT
+    t_empty = TIME_TICKUS
+    PRINT "空循环总耗时(us): ", t_empty
+
+    ' ---------- 问题1：力控参数读取方式 ----------
+    ' 1.1 TABLE 单地址读取（现状 FORCE_SAMPLE 逐条读的方式）
+    TIME_TICKUS = 0
+    FOR i = 0 TO n - 1
+        bench_value = i
+        bench_addr = i MOD 16
+        bench_value = TABLE(900 + bench_addr)
+    NEXT
+    t_test = TIME_TICKUS
+    PRINT "TABLE 单地址读取每次(us): ", (t_test - t_empty) / n
+
+    ' 1.2 一条批量数组赋值读入 16 个 TABLE（一句话缓存方案）
+    TIME_TICKUS = 0
+    FOR i = 0 TO n - 1
+        bench_value = i
+        bench_addr = i MOD 16
+        bench_a(0, TABLE(900), TABLE(901), TABLE(902), TABLE(903), TABLE(904), TABLE(905), TABLE(906), TABLE(907), TABLE(908), TABLE(909), TABLE(910), TABLE(911), TABLE(912), TABLE(913), TABLE(914), TABLE(915))
+    NEXT
+    t_test = TIME_TICKUS
+    PRINT "批量数组赋值读TABLE 16通道每批(us): ", (t_test - t_empty) / n
+    PRINT "批量数组赋值读TABLE 每通道(us): ", (t_test - t_empty) / n / 16
+
+    ' 1.3 DMCPY TABLE→数组 16 通道
+    TIME_TICKUS = 0
+    FOR i = 0 TO n - 1
+        bench_value = i
+        bench_addr = i MOD 16
+        DMCPY bench_a(0), TABLE(900), 16
+    NEXT
+    t_test = TIME_TICKUS
+    PRINT "DMCPY TABLE→数组 16通道每批(us): ", (t_test - t_empty) / n
+    PRINT "DMCPY TABLE→数组 每通道(us): ", (t_test - t_empty) / n / 16
+
+    ' 1.4 数组元素读取（参数缓存进数组后每次使用的成本）
+    TIME_TICKUS = 0
+    FOR i = 0 TO n - 1
+        bench_value = i
+        bench_addr = i MOD 16
+        bench_value = bench_a(bench_addr)
+    NEXT
+    t_test = TIME_TICKUS
+    PRINT "数组元素读取每次(us): ", (t_test - t_empty) / n
+
+    ' 1.5 编译期常量参与运算（理论下限，运行时不可调）
+    TIME_TICKUS = 0
+    FOR i = 0 TO n - 1
+        bench_value = i
+        bench_addr = i MOD 16
+        bench_value = i * BENCH_K
+    NEXT
+    t_test = TIME_TICKUS
+    PRINT "常量参与运算每次(us): ", (t_test - t_empty) / n
+
+    ' ---------- 问题2：状态帧写入方式 ----------
+    ' 2.1 现状：一句话 16 参数直写（MPOS/DRIVE_TORQUE/数组内联）
+    TIME_TICKUS = 0
+    FOR i = 0 TO n - 1
+        bench_value = i
+        bench_addr = i MOD 16
+        TABLE(900, MPOS(0), MPOS(1), MPOS(2), MPOS(3), MPOS(4), DRIVE_TORQUE(0), DRIVE_TORQUE(1), DRIVE_TORQUE(2), DRIVE_TORQUE(3), DRIVE_TORQUE(4), bench_a(0), bench_a(1), bench_a(2), bench_a(3), bench_a(4), bench_a(5))
+    NEXT
+    t_test = TIME_TICKUS
+    PRINT "现状16参数一句话直写每批(us): ", (t_test - t_empty) / n
+
+    ' 2.2 两句方案：先批量填充数组，再 DMCPY 到 TABLE
+    TIME_TICKUS = 0
+    FOR i = 0 TO n - 1
+        bench_value = i
+        bench_addr = i MOD 16
+        bench_b(0, MPOS(0), MPOS(1), MPOS(2), MPOS(3), MPOS(4), DRIVE_TORQUE(0), DRIVE_TORQUE(1), DRIVE_TORQUE(2), DRIVE_TORQUE(3), DRIVE_TORQUE(4), bench_a(0), bench_a(1), bench_a(2), bench_a(3), bench_a(4), bench_a(5))
+        DMCPY TABLE(900), bench_b(0), 16
+    NEXT
+    t_test = TIME_TICKUS
+    PRINT "数组填充+DMCPY 两句合计每批(us): ", (t_test - t_empty) / n
+
+    ' 2.3 DMCPY 纯拷贝成本：数组→TABLE 16 通道
+    TIME_TICKUS = 0
+    FOR i = 0 TO n - 1
+        bench_value = i
+        bench_addr = i MOD 16
+        DMCPY TABLE(900), bench_a(0), 16
+    NEXT
+    t_test = TIME_TICKUS
+    PRINT "DMCPY 数组→TABLE 16通道每批(us): ", (t_test - t_empty) / n
+    PRINT "DMCPY 数组→TABLE 每通道(us): ", (t_test - t_empty) / n / 16
+
+    ' 2.4 TABLE 16 通道纯数值批量写（与旧基准对照，供跨次比较）
+    TIME_TICKUS = 0
+    FOR i = 0 TO n - 1
+        bench_value = i
+        bench_addr = i MOD 16
+        TABLE(900,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15)
+    NEXT
+    t_test = TIME_TICKUS
+    PRINT "TABLE 16通道纯数值批量写每批(us): ", (t_test - t_empty) / n
+
+    ' ---------- 问题3：GLOBAL SUB 空调用开销 ----------
+    TIME_TICKUS = 0
+    FOR i = 0 TO n - 1
+        bench_value = i
+        bench_addr = i MOD 16
+        BENCH_EMPTY_SUB()
+    NEXT
+    t_test = TIME_TICKUS
+    PRINT "空SUB调用每次(us): ", (t_test - t_empty) / n
+
+    ' ---------- 问题4：变量读与判定开销 ----------
+    ' 4.1 GLOBAL 变量读
+    TIME_TICKUS = 0
+    FOR i = 0 TO n - 1
+        bench_value = i
+        bench_addr = i MOD 16
+        bench_value = bench_g
+    NEXT
+    t_test = TIME_TICKUS
+    PRINT "GLOBAL 变量读取每次(us): ", (t_test - t_empty) / n
+
+    ' 4.2 LOCAL 变量读
+    TIME_TICKUS = 0
+    FOR i = 0 TO n - 1
+        bench_value = i
+        bench_addr = i MOD 16
+        bench_value = bench_local
+    NEXT
+    t_test = TIME_TICKUS
+    PRINT "LOCAL 变量读取每次(us): ", (t_test - t_empty) / n
+
+    ' 4.3 单条件 IF 判定（条件恒真，含一句赋值）
+    TIME_TICKUS = 0
+    FOR i = 0 TO n - 1
+        bench_value = i
+        bench_addr = i MOD 16
+        IF bench_g = 1 THEN
+            bench_value = 1
+        ENDIF
+    NEXT
+    t_test = TIME_TICKUS
+    PRINT "单条件IF(含赋值)每次(us): ", (t_test - t_empty) / n
+
+    ' 4.4 双条件 IF AND 判定（条件恒真，含一句赋值）
+    TIME_TICKUS = 0
+    FOR i = 0 TO n - 1
+        bench_value = i
+        bench_addr = i MOD 16
+        IF bench_g = 1 AND bench_local = 1 THEN
+            bench_value = 1
+        ENDIF
+    NEXT
+    t_test = TIME_TICKUS
+    PRINT "双条件IF-AND(含赋值)每次(us): ", (t_test - t_empty) / n
+
+    ' 清理测试地址，不影响其他控制参数
+    TABLE(900,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0)
+
+    PRINT "优化方向基准测试完成"
     PRINT "=================================="
 END SUB
