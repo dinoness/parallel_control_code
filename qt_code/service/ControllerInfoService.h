@@ -8,10 +8,7 @@
 #include "../protocol/ControllerInfoProtocol.h"
 #include "../worker/ControllerInfoWorker.h"
 
-/// @brief 控制器信息服务 — 管理监控线程生命周期
-///
-/// 负责创建 QThread 和 ControllerInfoWorker，提供 start/stop 接口。
-/// 断开控制器连接前，必须调用 stopAll() 避免 Worker 继续读取已关闭的 handle。
+/// @brief 控制器信息服务，统一管理后台监控线程生命周期
 class ControllerInfoService : public QObject
 {
     Q_OBJECT
@@ -30,16 +27,21 @@ public:
     Result startStatusMonitor(int intervalMs = kStatusUploadIntervalMs);
     void stopStatusMonitor();
 
+    Result startForceStreamMonitor(int intervalMs = kForceStreamUploadIntervalMs);
+    void stopForceStreamMonitor();
+
     void stopAll();
 
     bool isStateMonitorRunning() const;
     bool isSensorUploadRunning() const;
     bool isStatusMonitorRunning() const;
+    bool isForceStreamMonitorRunning() const;
 
 signals:
     void stateUpdated(const ControllerStateSnapshot& snapshot);
     void sensorBatchReceived(const SensorTableBatch& batch);
     void statusBatchReceived(const StatusTableBatch& batch);
+    void forceStreamBatchReceived(const ForceStreamBatch& batch);
     void monitorError(Result result);
 
 private:
@@ -53,4 +55,5 @@ private:
     bool stateMonitorRunning_ = false;
     bool sensorUploadRunning_ = false;
     bool statusMonitorRunning_ = false;
+    bool forceStreamMonitorRunning_ = false;
 };

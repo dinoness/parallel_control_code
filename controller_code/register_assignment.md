@@ -125,7 +125,12 @@ MODBUS_REG（位寄存器）0~7999
   - 要求 TSIZE ≥ 29450（main.bas 初始化最前面已设置 TSIZE = 34000）
   - header：TABLE(21000)=frame_counter，TABLE(21001)=write_index（下一帧写入位置）
   - 每帧布局：[0-4] dL(um) / [5-9] 扭矩(‰) / [10-14] 末端 x,y,z,phi,theta / [15] ee_valid / [16-21] 六轴力/力矩原始值
-  - 不上传编码器及滤波力、目标力、Z 修正量、力控模式、传感器状态等派生状态；29450-33289 保留
+  - 不上传编码器及滤波力、目标力、Z 修正量、力控模式、传感器状态等派生状态
+29450-31499，独立高频 Fz 环形区（header 2 + 2048 帧 × 1 通道，FORCE_SAMPLE 每伺服周期写入一帧，1kHz）
+  - TABLE(29450)=frame_counter，TABLE(29451)=write_index；TABLE(29452)起为 Fz 原始码，header最后提交
+  - 1kHz 下覆盖 2.048s；Qt 每 50ms 批量读取，录制格式为 frame_counter,time_ms,fz_raw,fz_N
+  - High-fre Force 录制检测到覆盖丢帧时停止并提示；All channels 仍使用上述 100Hz 全通道状态区
+31500-33289，预留
 
 轨迹数据区（1000-9999）布局：
 - 10 个指令组，每组 100 条指令，每条 7 个数（一组占 700 个 TABLE 位置）

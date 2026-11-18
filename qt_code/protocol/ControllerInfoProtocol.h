@@ -38,6 +38,10 @@ public:
     Result readStatusBatch(quint64& lastFrameCounter,
                            StatusTableBatch& batch);
 
+    /// @brief 从TABLE[29450+]批量读取1kHz高频Fz原始帧
+    Result readForceStreamBatch(quint64& lastFrameCounter,
+                                ForceStreamBatch& batch);
+
     /// @brief 将系统状态值转换为可读字符串
     static QString systemStateToText(uint16_t state);
 

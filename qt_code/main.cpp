@@ -19,6 +19,8 @@ int main(int argc, char *argv[])
     qRegisterMetaType<SensorTableBatch>("SensorTableBatch");
     qRegisterMetaType<StatusSampleFrame>("StatusSampleFrame");
     qRegisterMetaType<StatusTableBatch>("StatusTableBatch");
+    qRegisterMetaType<ForceStreamFrame>("ForceStreamFrame");
+    qRegisterMetaType<ForceStreamBatch>("ForceStreamBatch");
 
     AppContext appContext;
 

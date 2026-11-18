@@ -230,6 +230,14 @@ ZMotionDriver (getTable / readModbusReg / readModbusRegs)
 3. `StatusSampleFrame` 提供 dL、扭矩、末端位姿和六轴力原始值；现有 UI 显示最新一帧的 dL、扭矩和末端位姿，编码器标签固定显示 0
 4. 断开连接时 20 个 label 全部复位为 `-`
 
+### 数据保存与高频 Fz
+
+- `cbox_data_save_mode` 默认 `All channels`：沿用 100Hz 全通道 CSV 格式。
+- `High-fre Force`：控制器在 TABLE[29450..31499] 提供 1kHz 单通道 Fz 环形区（header 2 + 2048帧），`startForceStreamMonitor()` 在连接后启动，Qt 每 50ms 批量读取。
+- 高频 CSV 格式为 `frame_counter,time_ms,fz_raw,fz_N`，time_ms 从本文件首帧起按 1ms 递增；UI 仍使用原状态帧刷新，不要求 1kHz 刷新。
+- 高频录制期间锁定模式下拉框；检测到环形区覆盖时停止录制并提示文件不适用于连续 FFT。
+- `data/sensor_fft.m` 根据 time_ms 自动识别 100Hz/1kHz，并检查帧号与时间间隔连续性。
+
 ### 传感器 TABLE 上传（预留，默认不启动）
 
 控制器端每 1 ms 采样 12 通道传感器数据写入 TABLE[8000+] 环形缓冲（1024 帧）。上位机不做 1 ms 单点读取，而是按 `uploadIntervalMs`（默认 20 ms）批量读取，避免阻塞急停和轨迹下发。

@@ -138,7 +138,7 @@ CTRL_MOVE() 启动完整混合轨迹；普通 MOVE/MOVEABS/PT/DELAY 与力控段
 FORCE_CFG/FORCE_OFF 显式划分力控段，阶段切换通过非阻塞 IDLE 检查；CMD_NONE 等待所有运动结束后才写 EVENT_CTRL_DONE。
 CTRL_MOVE_PAUSE()/CTRL_MOVE_RESUME() 同时使用 MOVE_PAUSE/MOVE_RESUME 暂停运动缓冲，不能对 TASK_CTRL 使用 PAUSETASK/RESUMETASK。
 力传感器参数经 TABLE 400-419 适配（Qt 仅读 409/410 做 Fz 换算；401/402/405 为 10ms 低频调试镜像）。第一阶段接入 EK1100（节点6）后的 EL3702（节点7）CH1：仅使用标准 AIN，只读 AIN(33)=CH1 模拟量（EL3702 原生有符号 INT16，ZMC 侧若按无符号返回则由算术回绕恢复，无分支）；总线周期 1ms 与伺服周期 1:1，不读 CycleCounter；EL3702 超采样系数须为 1。FORCE_SAMPLE 分每周期热路径（采集+标定滤波+过力）和 10ms 低频维护（NODE_STATUS/ENABLE/断流检测/状态细分/调试镜像，借 status_tick=5 触发）。只采集 Fz，PI 增益为 0，理论比例和零位待实测校准。
-状态采样写入 TABLE 环形区（TABLE_STATUS_BASE=21000 起，header 2 + 384 帧 × 22 通道），包含 dL、扭矩、末端位姿和六轴原始力；编码器及力控派生状态不上传。
+状态采样写入 TABLE 环形区（TABLE_STATUS_BASE=21000 起，header 2 + 384 帧 × 22 通道），包含 dL、扭矩、末端位姿和六轴原始力；编码器及力控派生状态不上传。FORCE_SAMPLE 另在每伺服周期向 TABLE 29450-31499 的独立环形区写入一帧 Fz 原始码（header 2 + 2048 帧 × 1 通道，1kHz），Qt 每 50ms 批量读取用于 High-fre Force 录制，不改变全通道状态帧的 100Hz 分频。
 
 ### 运动学系统
 
@@ -154,7 +154,7 @@ CTRL_MOVE_PAUSE()/CTRL_MOVE_RESUME() 同时使用 MOVE_PAUSE/MOVE_RESUME 暂停�
 
 详见 `register_assignment.md`。
 
-- **TABLE**: 0-299 结构参数 / 300-349 单轴指令 / 350-399 点动指令 / 400-419 力传感器与力控参数 / 420-999 预留 / 1000-9999 轨迹数据 / 21000-29449 状态监控环形区（384 帧 × 22 通道，要求 TSIZE ≥ 29450）
+- **TABLE**: 0-299 结构参数 / 300-349 单轴指令 / 350-399 点动指令 / 400-419 力传感器与力控参数 / 420-999 预留 / 1000-9999 轨迹数据 / 21000-29449 状态监控环形区（384 帧 × 22 通道）/ 29450-31499 高频 Fz 环形区（2048 帧 × 1 通道，要求 TSIZE ≥ 31500）
 - **MODBUS_REG**: 0-49 系统状态 / 50-69 轨迹状态 / 70-79 点动状态 / 80-89 单轴状态 / 90-99 事件序列
 
 ## 开发约定

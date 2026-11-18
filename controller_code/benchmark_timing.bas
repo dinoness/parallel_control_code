@@ -331,3 +331,156 @@ GLOBAL SUB BENCHMARK_OPT()
     PRINT "优化方向基准测试完成"
     PRINT "=================================="
 END SUB
+
+' ================================================================
+' 力控热路径专项基准：RUNTASK 10, BENCHMARK_FORCE()
+' 1. PTABS 消费方式：FOR 循环逐条 TABLE 读 vs 一条批量数组赋值
+' 2. cfunc_impendance 调用 vs 等价 BASIC 内联计算
+' 注意：cfunc_impendance 由 STATUS_INIT 的 DEFINE_CFUNC 注册，
+'       必须在 main.bas 启动流程运行过之后才能执行本测试
+' ================================================================
+GLOBAL SUB BENCHMARK_FORCE()
+    DIM bench_b(8)
+    LOCAL i, n, bench_j
+    LOCAL t_empty, t_test
+    LOCAL bench_value, bench_addr
+
+    n = 10000
+
+    PRINT "=================================="
+    PRINT "力控热路径基准测试，循环次数: ", n
+
+    ' 0. 公共空循环基准
+    TIME_TICKUS = 0
+    FOR i = 0 TO n - 1
+        bench_value = i
+        bench_addr = i MOD 16
+    NEXT
+    t_empty = TIME_TICKUS
+    PRINT "空循环总耗时(us): ", t_empty
+
+    ' 1.1 旧方式：FOR 循环 5 次逐条 TABLE 读（修改前的 PTABS 消费）
+    TIME_TICKUS = 0
+    FOR i = 0 TO n - 1
+        bench_value = i
+        bench_addr = i MOD 16
+        FOR bench_j = 0 TO 4
+            bench_b(bench_j) = TABLE(900 + bench_j)
+        NEXT
+    NEXT
+    t_test = TIME_TICKUS
+    PRINT "FOR循环5次TABLE读每次(us): ", (t_test - t_empty) / n
+
+    ' 1.2 新方式：一条批量数组赋值读 5 个 TABLE
+    TIME_TICKUS = 0
+    FOR i = 0 TO n - 1
+        bench_value = i
+        bench_addr = i MOD 16
+        bench_b(0, TABLE(900), TABLE(901), TABLE(902), TABLE(903), TABLE(904))
+    NEXT
+    t_test = TIME_TICKUS
+    PRINT "批量赋值5次TABLE读每次(us): ", (t_test - t_empty) / n
+
+    ' 2.1 cfunc_impendance C 函数调用（含参数传递与返回）
+    TIME_TICKUS = 0
+    FOR i = 0 TO n - 1
+        bench_value = i
+        bench_addr = i MOD 16
+        bench_value = cfunc_impendance(bench_value, 10.0)
+    NEXT
+    t_test = TIME_TICKUS
+    PRINT "cfunc_impendance调用每次(us): ", (t_test - t_empty) / n
+
+    ' 2.2 等价 BASIC 内联计算（一次误差、比例、限幅量级相当的算术组合）
+    TIME_TICKUS = 0
+    FOR i = 0 TO n - 1
+        bench_value = i
+        bench_addr = i MOD 16
+        bench_value = 0.5 * (10.0 - bench_value) + 0.1 * (10.0 - bench_value) * 0.001
+    NEXT
+    t_test = TIME_TICKUS
+    PRINT "BASIC内联等价计算每次(us): ", (t_test - t_empty) / n
+
+    PRINT "力控热路径基准测试完成"
+    PRINT "=================================="
+END SUB
+
+' ================================================================
+' 运动指令下发基准：RUNTASK 10, BENCHMARK_MOVE()
+' 前置条件：已完成回零并进入机器人模式（ee_valid=1），系统空闲无运动
+' 测试对象：BASE 切换、MODBUS_REG 读、REMAIN_BUFFER 判断、
+'          MOVE_PTABS(ticks=1) 含 CFRAME 逆解的下发开销
+' 注意：MOVE_PTABS 测试向虚拟轴 6-10 缓冲写入 200 条零位移保持点，
+'       目标=当前 DPOS，不产生实际位移；结束后 RAPIDSTOP(2) 清空缓冲
+' ================================================================
+GLOBAL SUB BENCHMARK_MOVE()
+    LOCAL i, n, t_empty, t_test
+    LOCAL bench_value, bench_addr
+
+    n = 10000
+
+    PRINT "=================================="
+    PRINT "运动指令下发基准测试，循环次数: ", n
+
+    ' 0. 公共空循环基准
+    TIME_TICKUS = 0
+    FOR i = 0 TO n - 1
+        bench_value = i
+        bench_addr = i MOD 16
+    NEXT
+    t_empty = TIME_TICKUS
+    PRINT "空循环总耗时(us): ", t_empty
+
+    ' 1. BASE(6,7,8,9,10) 轴组切换
+    TIME_TICKUS = 0
+    FOR i = 0 TO n - 1
+        bench_value = i
+        bench_addr = i MOD 16
+        BASE(6,7,8,9,10)
+    NEXT
+    t_test = TIME_TICKUS
+    PRINT "BASE(6-10) 每次(us): ", (t_test - t_empty) / n
+
+    ' 2. MODBUS_REG 单地址读取（组状态检查的语句开销）
+    TIME_TICKUS = 0
+    FOR i = 0 TO n - 1
+        bench_value = i
+        bench_addr = i MOD 16
+        bench_value = MODBUS_REG(50)
+    NEXT
+    t_test = TIME_TICKUS
+    PRINT "MODBUS_REG 读取每次(us): ", (t_test - t_empty) / n
+
+    ' 3. REMAIN_BUFFER 缓冲余量判断（守卫语句的开销）
+    TIME_TICKUS = 0
+    FOR i = 0 TO n - 1
+        bench_value = i
+        bench_addr = i MOD 16
+        IF REMAIN_BUFFER AXIS(6) <= 2 THEN
+            bench_value = 1
+        ENDIF
+    NEXT
+    t_test = TIME_TICKUS
+    PRINT "REMAIN_BUFFER 判断每次(us): ", (t_test - t_empty) / n
+
+    ' 4. MOVE_PTABS(ticks=1) 下发：含 CFRAME 逆解与缓冲写入，限发 200 条
+    '    空循环基准按 200 次折算：t_empty / 50
+    IF ee_valid = 1 THEN
+        BASE(6,7,8,9,10)
+        TIME_TICKUS = 0
+        FOR i = 0 TO 199
+            bench_value = i
+            bench_addr = i MOD 16
+            MOVE_PTABS(1, DPOS(6), DPOS(7), DPOS(8), DPOS(9), DPOS(10))
+        NEXT
+        t_test = TIME_TICKUS
+        RAPIDSTOP(2)
+        DELAY(200)
+        PRINT "MOVE_PTABS(ticks=1) 下发每次(us): ", (t_test - t_empty / 50) / 200
+    ELSE
+        PRINT "ee_valid=0，跳过 MOVE_PTABS 测试（请先回零并进入机器人模式）"
+    ENDIF
+
+    PRINT "运动指令下发基准测试完成"
+    PRINT "=================================="
+END SUB

@@ -78,9 +78,29 @@ struct StatusTableBatch
     QDateTime timestamp;
 };
 
+/// @brief 单帧高频Fz数据（控制器每1ms写入一帧）
+struct ForceStreamFrame
+{
+    quint64 frameCounter = 0;
+    float fzRaw = 0.0f;
+    float fzNewton = 0.0f;
+    QDateTime hostTimestamp;
+};
+
+/// @brief 批量高频Fz数据
+struct ForceStreamBatch
+{
+    QVector<ForceStreamFrame> frames;
+    bool overflow = false;
+    quint64 droppedFrames = 0;
+    QDateTime timestamp;
+};
+
 Q_DECLARE_METATYPE(ControllerStateSnapshot)
 Q_DECLARE_METATYPE(SensorTableConfig)
 Q_DECLARE_METATYPE(SensorSampleFrame)
 Q_DECLARE_METATYPE(SensorTableBatch)
 Q_DECLARE_METATYPE(StatusSampleFrame)
 Q_DECLARE_METATYPE(StatusTableBatch)
+Q_DECLARE_METATYPE(ForceStreamFrame)
+Q_DECLARE_METATYPE(ForceStreamBatch)

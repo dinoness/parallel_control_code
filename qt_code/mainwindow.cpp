@@ -99,6 +99,10 @@ void MainWindow::Init()
                     if (!ret.ok) {
                         qDebug() << "Start status monitor failed:" << ret.message;
                     }
+                    ret = ctx_->controllerInfoService()->startForceStreamMonitor();
+                    if (!ret.ok) {
+                        qDebug() << "Start force stream monitor failed:" << ret.message;
+                    }
                 } else {
                     ctx_->controllerInfoService()->stopAll();
                     ui->label_system_state->setText("Disconnected");
@@ -172,6 +176,37 @@ void MainWindow::Init()
                          << "dropped:" << batch.droppedFrames;
             });
 
+    // ── 1kHz高频Fz：只保存，不替代现有低频全通道UI显示 ──
+    connect(ctx_->controllerInfoService(), &ControllerInfoService::forceStreamBatchReceived,
+            this, [this](const ForceStreamBatch& batch) {
+                if (batch.overflow) {
+                    qDebug() << "Force stream overflow, dropped:" << batch.droppedFrames;
+                    if (dataSaving_ && dataSaveHighFrequency_) {
+                        const quint64 dropped = batch.droppedFrames;
+                        stopDataSave();
+                        QMessageBox::warning(this, "高频力数据丢帧",
+                            QString("环形缓冲区发生覆盖，丢失 %1 帧；录制已停止，当前文件不适用于连续FFT。")
+                                .arg(dropped));
+                        return;
+                    }
+                }
+                if (!dataSaving_ || !dataSaveHighFrequency_) return;
+
+                for (const ForceStreamFrame& frame : batch.frames) {
+                    if (forceSaveFirstFrame_ == 0) {
+                        forceSaveFirstFrame_ = frame.frameCounter;
+                    }
+                    dataSaveStream_ << frame.frameCounter << ','
+                                    << (frame.frameCounter - forceSaveFirstFrame_) << ','
+                                    << QString::number(frame.fzRaw, 'f', 0) << ','
+                                    << QString::number(frame.fzNewton, 'f', 6) << '\n';
+                }
+                if (dataSaveFlushTimer_.elapsed() >= 1000) {
+                    dataSaveStream_.flush();
+                    dataSaveFlushTimer_.restart();
+                }
+            });
+
     // ── 机器人状态数据显示 ────────────────────────────
     connect(ctx_->controllerInfoService(), &ControllerInfoService::statusBatchReceived,
             this, [this](const StatusTableBatch& batch) {
@@ -208,8 +243,8 @@ void MainWindow::Init()
                 // 力信号与末端位姿有效性无关，始终显示最新换算值
                 ui->label_ee_fz->setText(QString::number(frame.fzNewton, 'f', 3));
 
-                // ── 数据保存：录制开启时写入批次中的全部帧 ──
-                if (dataSaving_) {
+                // ── All channels：保持现有100Hz全通道保存 ──
+                if (dataSaving_ && !dataSaveHighFrequency_) {
                     for (const StatusSampleFrame& f : batch.frames) {
                         dataSaveStream_ << f.frameCounter << ','
                                         << (f.frameCounter * 10) << ','  // 100Hz 采样，帧号×10=相对毫秒
@@ -1342,16 +1377,24 @@ void MainWindow::on_btn_data_save_clicked()
         return;
     }
     dataSaveStream_.setDevice(&dataSaveFile_);
+    dataSaveHighFrequency_ = (ui->cbox_data_save_mode->currentIndex() == 1);
+    forceSaveFirstFrame_ = 0;
 
-    // 表头：列为 帧号 / 相对时间 / Fz(N) / dL(um) / 扭矩(‰) / 末端位姿(um, 角秒) / 位姿有效标志
-    dataSaveStream_ << "frame_counter,time_ms,fz_N,"
-                       "dL1_um,dL2_um,dL3_um,dL4_um,dL5_um,"
-                       "torque1_permille,torque2_permille,torque3_permille,torque4_permille,torque5_permille,"
-                       "ee_x_um,ee_y_um,ee_z_um,ee_phi_arcsec,ee_theta_arcsec,ee_valid\n";
+    if (dataSaveHighFrequency_) {
+        // High-fre Force：1kHz，时间为本文件首帧起的相对毫秒
+        dataSaveStream_ << "frame_counter,time_ms,fz_raw,fz_N\n";
+    } else {
+        // All channels：保持现有100Hz全通道格式
+        dataSaveStream_ << "frame_counter,time_ms,fz_N,"
+                           "dL1_um,dL2_um,dL3_um,dL4_um,dL5_um,"
+                           "torque1_permille,torque2_permille,torque3_permille,torque4_permille,torque5_permille,"
+                           "ee_x_um,ee_y_um,ee_z_um,ee_phi_arcsec,ee_theta_arcsec,ee_valid\n";
+    }
     dataSaveStream_.flush();
 
     dataSaving_ = true;
     dataSaveFlushTimer_.start();
+    ui->cbox_data_save_mode->setEnabled(false);
     ui->btn_data_save->setText("STOP");
     ui->label_data_save_status->setText("ON");
     ui->statusbar->showMessage(QString("数据保存中: %1").arg(filePath));
@@ -1366,6 +1409,8 @@ void MainWindow::stopDataSave()
         ui->statusbar->showMessage(
             QString("数据已保存: %1").arg(dataSaveFile_.fileName()), 5000);
     }
+    dataSaveHighFrequency_ = false;
+    ui->cbox_data_save_mode->setEnabled(true);
     ui->btn_data_save->setText("START");
     ui->label_data_save_status->setText("OFF");
 }

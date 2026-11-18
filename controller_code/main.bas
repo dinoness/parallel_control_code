@@ -10,7 +10,6 @@ GLOBAL CONST BUS_SLOT = 0  ' 槽位号，默认0
 GLOBAL CONST ROBO_PARA_START_ID = 0  ' 参数起始id
 
 
-
 ' 系统状态变量
 GLOBAL system_state
 GLOBAL motion_mode
@@ -33,6 +32,8 @@ GLOBAL rotation_speed_rpm
 GLOBAL force_hw_sample_count    ' 硬件采样序号（每伺服周期+1，供断流检测）
 GLOBAL force_hw_valid           ' 硬件数据有效标志（节点在线即有效，10ms 刷新）
 GLOBAL force_enabled            ' 适配启停缓存（跟随 TABLE(400)，10ms 刷新）
+GLOBAL force_stream_count ' 高频Fz已提交帧数（每伺服周期+1）
+GLOBAL force_stream_write_index   ' 高频Fz下一帧环形位置（0..FORCE_STREAM_FRAMES-1）
 
 GLOBAL_DEF()
 REG_CLEAR()

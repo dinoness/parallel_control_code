@@ -190,3 +190,12 @@ constexpr int kStatusFrameBase = 21002;      // kStatusTableBase + kStatusHeader
 constexpr int kStatusChannelCount = 22;
 constexpr int kStatusRingFrameCapacity = 384;
 constexpr int kStatusUploadIntervalMs = 100;
+
+// 独立高频Fz TABLE环形缓冲：控制器每1ms写入1个原始码，Qt每50ms批量读取
+// TABLE[29450..29451]为header：[frame_counter, write_index]
+// TABLE[29452..31499]为2048帧×1通道，1kHz下覆盖2.048s
+constexpr int kForceStreamTableBase = 29450;
+constexpr int kForceStreamHeaderFloats = 2;
+constexpr int kForceStreamFrameBase = 29452;
+constexpr int kForceStreamRingFrameCapacity = 2048;
+constexpr int kForceStreamUploadIntervalMs = 50;

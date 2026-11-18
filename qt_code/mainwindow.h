@@ -136,6 +136,8 @@ private:
 
     // ── 数据保存 ──────────────────────────────────────
     bool dataSaving_ = false;
+    bool dataSaveHighFrequency_ = false;
+    quint64 forceSaveFirstFrame_ = 0;
     QFile dataSaveFile_;
     QTextStream dataSaveStream_;
     QElapsedTimer dataSaveFlushTimer_;  // flush 节流：每秒落盘一次

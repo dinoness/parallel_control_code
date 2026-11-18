@@ -15,6 +15,9 @@
 
 ' 初始化状态采样、力控默认参数，并注册全工程唯一的伺服周期中断
 GLOBAL SUB STATUS_INIT()
+    DEFINE_CFUNC cfunc_impendance FLOAT impendance_ctrl(FLOAT f_sensor, FLOAT f_ref)
+
+
     LOCAL i
     PRINT "统一状态采样与 CTRL 混合轨迹任务启动"
     DL_BASE_CAPTURE()
@@ -61,6 +64,9 @@ GLOBAL SUB STATUS_INIT()
 
     TABLE(TABLE_STATUS_BASE) = 0
     TABLE(TABLE_STATUS_BASE + 1) = 0
+    force_stream_count = 0
+    force_stream_write_index = 0
+    TABLE(TABLE_FORCE_STREAM_BASE, 0, 0)
     INT_CYCLE(1, TASK_CTRL, SERVO_CYCLE)
 END SUB
 
@@ -133,6 +139,13 @@ GLOBAL SUB FORCE_SAMPLE()
         fz_raw = (AIN(FORCE_AIN_BASE + 1) + 32768) MOD 65536 - 32768
         force_raw(2) = fz_raw
         force_hw_sample_count = force_hw_sample_count + 1
+
+        ' ' 独立高频流：每伺服周期保存1帧，先写数据再提交header。
+        ' TABLE(FORCE_STREAM_DATA_BEGIN + force_stream_write_index) = fz_raw
+        ' force_stream_write_index = (force_stream_write_index + 1) MOD FORCE_STREAM_FRAMES
+        ' force_stream_count = force_stream_count + 1
+        ' TABLE(TABLE_FORCE_STREAM_BASE, force_stream_count, force_stream_write_index)
+
         ' 标定 + 一阶低通合并为一条；alpha 的合法范围 (0,1] 由参数配置侧保证
         force_filtered = force_filtered + TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_FILTER_ALPHA) * ((fz_raw - TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_ZERO)) * TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_SCALE) - force_filtered)
         ' 传感器启用时，过力保护覆盖 CTRL 的普通段和力控段
@@ -271,24 +284,23 @@ GLOBAL SUB CTRL_TRACE_STEP()
     ' 阶段等待只查询 IDLE，不在周期中断中阻塞
     IF exec_state = EXEC_WAIT_NORMAL_IDLE THEN
         IF IDLE(6) AND IDLE(7) AND IDLE(8) AND IDLE(9) AND IDLE(10) THEN
-            IF force_sensor_status <> FORCE_SENSOR_VALID THEN
-                CTRL_ABORT(ERR_FORCE_SENSOR_INVALID)
-                RETURN
-            ENDIF
-            ' 这些条件都是什么意思：不超时，不过量程，不调整过大，控制变化率===========================================================
-            IF TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_CONTACT_TICKS) < 1 OR TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_MAX_FORCE) <= 0 OR TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_MAX_ADJUST) <= 0 OR TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_MAX_ADJ_RATE) <= 0 THEN
-                CTRL_ABORT(ERR_FORCE_PARAM_INVALID)
-                RETURN
-            ENDIF
-            ' z修正方向是hyw（估计是用了绝对值+符号）================================================================================
-            IF TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_DIRECTION) <> 1 AND TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_DIRECTION) <> -1 THEN
-                CTRL_ABORT(ERR_FORCE_PARAM_INVALID)
-                RETURN
-            ENDIF
-            FOR i = 0 TO 4
-                nominal_pos(i) = DPOS(6 + i)
-                adj_pos(i) = 0
-            NEXT
+            ' IF force_sensor_status <> FORCE_SENSOR_VALID THEN
+            '     CTRL_ABORT(ERR_FORCE_SENSOR_INVALID)
+            '     RETURN
+            ' ENDIF
+            ' ' 这些条件都是什么意思：不超时，不过量程，不调整过大，控制变化率===========================================================
+            ' IF TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_CONTACT_TICKS) < 1 OR TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_MAX_FORCE) <= 0 OR TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_MAX_ADJUST) <= 0 OR TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_MAX_ADJ_RATE) <= 0 THEN
+            '     CTRL_ABORT(ERR_FORCE_PARAM_INVALID)
+            '     RETURN
+            ' ENDIF
+            ' ' z修正方向是hyw（估计是用了绝对值+符号）================================================================================
+            ' IF TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_DIRECTION) <> 1 AND TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_DIRECTION) <> -1 THEN
+            '     CTRL_ABORT(ERR_FORCE_PARAM_INVALID)
+            '     RETURN
+            ' ENDIF
+
+            nominal_pos(0, DPOS(6), DPOS(7), DPOS(8), DPOS(9),  DPOS(10))
+            adj_pos(0, 0, 0, 0, 0, 0)
             has_target = 0
             force_contact_count = 0
             force_prev_error = 0
@@ -301,9 +313,7 @@ GLOBAL SUB CTRL_TRACE_STEP()
         ENDIF
     ELSEIF exec_state = EXEC_WAIT_FORCE_IDLE THEN
         IF IDLE(6) AND IDLE(7) AND IDLE(8) AND IDLE(9) AND IDLE(10) THEN
-            FOR i = 0 TO 4
-                adj_pos(i) = 0
-            NEXT
+            adj_pos(0, 0, 0, 0, 0, 0)
             force_state = FORCE_MODE_IDLE
             force_target_effective = 0
             force_prev_error = 0
@@ -321,60 +331,60 @@ GLOBAL SUB CTRL_TRACE_STEP()
 
     ' 力控计算每个周期执行，即使本周期没有新 PT 点也更新保持目标
     IF force_active = 1 THEN
-        ' 过力已在函数入口统一拦截，此处只拦对力控段致命的 INVALID/STALE
         IF force_sensor_status <> FORCE_SENSOR_VALID THEN
             CTRL_ABORT(ERR_FORCE_SENSOR_INVALID)
             RETURN
         ENDIF
 
-        dt_sec = SERVO_PERIOD / 1000000.0
-        IF force_state = FORCE_MODE_SEARCH THEN
-            IF ABS(force_filtered) >= force_contact_threshold THEN
-                force_contact_count = force_contact_count + 1
-            ELSE
-                force_contact_count = 0
-            ENDIF
-            IF force_contact_count >= TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_CONTACT_TICKS) THEN
-                force_state = FORCE_MODE_HOLD
-            ENDIF
-        ENDIF
+        ' dt_sec = SERVO_PERIOD / 1000000.0
+        ' IF force_state = FORCE_MODE_SEARCH THEN
+        '     IF ABS(force_filtered) >= force_contact_threshold THEN
+        '         force_contact_count = force_contact_count + 1
+        '     ELSE
+        '         force_contact_count = 0
+        '     ENDIF
+        '     IF force_contact_count >= TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_CONTACT_TICKS) THEN
+        '         force_state = FORCE_MODE_HOLD
+        '     ENDIF
+        ' ENDIF
 
-        ' 这段没看懂======================================================================================================
+        ' 这段是基于力误差，计算调整量=============
         IF force_state = FORCE_MODE_HOLD THEN
-            target_step = force_ramp_rate * dt_sec
-            IF force_target_effective < force_target_cmd THEN
-                force_target_effective = force_target_effective + target_step
-                IF force_target_effective > force_target_cmd THEN
-                    force_target_effective = force_target_cmd
-                ENDIF
-            ELSEIF force_target_effective > force_target_cmd THEN
-                force_target_effective = force_target_effective - target_step
-                IF force_target_effective < force_target_cmd THEN
-                    force_target_effective = force_target_cmd
-                ENDIF
-            ENDIF
+            ' target_step = force_ramp_rate * dt_sec
+            ' IF force_target_effective < force_target_cmd THEN
+            '     force_target_effective = force_target_effective + target_step
+            '     IF force_target_effective > force_target_cmd THEN
+            '         force_target_effective = force_target_cmd
+            '     ENDIF
+            ' ELSEIF force_target_effective > force_target_cmd THEN
+            '     force_target_effective = force_target_effective - target_step
+            '     IF force_target_effective < force_target_cmd THEN
+            '         force_target_effective = force_target_cmd
+            '     ENDIF
+            ' ENDIF
 
-            force_error = force_target_effective - force_filtered
-            adj_step = TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_KP) * (force_error - force_prev_error) + TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_KI) * force_error * dt_sec
-            max_step = TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_MAX_ADJ_RATE) * dt_sec
-            IF adj_step > max_step THEN
-                adj_step = max_step
-            ELSEIF adj_step < -max_step THEN
-                adj_step = -max_step
-            ENDIF
-            adj_pos(2) = adj_pos(2) + TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_DIRECTION) * adj_step
-            IF adj_pos(2) > force_adjust_limit THEN
-                adj_pos(2) = force_adjust_limit
-            ELSEIF adj_pos(2) < -force_adjust_limit THEN
-                adj_pos(2) = -force_adjust_limit
-            ENDIF
-            force_prev_error = force_error
+            ' force_error = force_target_effective - force_filtered
+            ' adj_step = TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_KP) * (force_error - force_prev_error) + TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_KI) * force_error * dt_sec
+            ' max_step = TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_MAX_ADJ_RATE) * dt_sec
+            ' IF adj_step > max_step THEN
+            '     adj_step = max_step
+            ' ELSEIF adj_step < -max_step THEN
+            '     adj_step = -max_step
+            ' ENDIF
+            ' adj_pos(2) = adj_pos(2) + TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_DIRECTION) * adj_step
+            ' IF adj_pos(2) > force_adjust_limit THEN
+            '     adj_pos(2) = force_adjust_limit
+            ' ELSEIF adj_pos(2) < -force_adjust_limit THEN
+            '     adj_pos(2) = -force_adjust_limit
+            ' ENDIF
+            ' force_prev_error = force_error
+            adj_pos(2) = cfunc_impendance(force_filtered, force_target_cmd)
         ELSE
             force_prev_error = 0
         ENDIF
     ENDIF
 
-    ' 运动指令在缓冲满时可能阻塞，保留至少两个缓冲位置后再读取和下发
+    ' 运动指令在缓冲满时会在中断内阻塞并直接导致 1034 超时，必须保留至少两个缓冲位置后再读取和下发
     ' REMAIN_BUFFER 的括号参数是运动类型而不是轴号；省略类型并显式指定虚拟主轴 6
     IF REMAIN_BUFFER AXIS(6) <= 2 THEN
         IF force_active = 1 THEN
@@ -457,14 +467,11 @@ GLOBAL SUB CTRL_TRACE_STEP()
         ' 需要完整解释这几个状态都是什么意思，这段没看懂============================================================================
         ELSEIF exec_state = EXEC_FORCE THEN
             IF cmd_id = CMD_MOVE_PTABS THEN
-                FOR i = 0 TO 4
-                    nominal_pos(i) = TABLE(ctrl_index + 1 + i)
-                NEXT
+                ' 一条批量赋值读入 5 个目标值，避免 FOR 循环逐条 TABLE 读的语句开销
+                nominal_pos(0, TABLE(ctrl_index+1), TABLE(ctrl_index+2), TABLE(ctrl_index+3), TABLE(ctrl_index+4), TABLE(ctrl_index+5))
                 has_target = 1
             ELSEIF cmd_id = CMD_MOVE_PT THEN
-                FOR i = 0 TO 4
-                    nominal_pos(i) = nominal_pos(i) + TABLE(ctrl_index + 1 + i)
-                NEXT
+                nominal_pos(0, nominal_pos(0)+TABLE(ctrl_index+1), nominal_pos(1)+TABLE(ctrl_index+2), nominal_pos(2)+TABLE(ctrl_index+3), nominal_pos(3)+TABLE(ctrl_index+4), nominal_pos(4)+TABLE(ctrl_index+5))
                 has_target = 1
             ELSEIF cmd_id = CMD_FORCE_CFG THEN
                 new_mode = TABLE(ctrl_index+1)
@@ -480,9 +487,9 @@ GLOBAL SUB CTRL_TRACE_STEP()
                         force_contact_threshold = TABLE(ctrl_index+3)
                         force_ramp_rate = TABLE(ctrl_index+4)
                         force_adjust_limit = max_step
-                        IF force_adjust_limit > TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_MAX_ADJUST) THEN
-                            force_adjust_limit = TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_MAX_ADJUST)
-                        ENDIF
+                        ' IF force_adjust_limit > TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_MAX_ADJUST) THEN
+                        '     force_adjust_limit = TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_MAX_ADJUST)
+                        ' ENDIF
                         force_contact_count = 0
                         force_prev_error = 0
                         IF new_mode = FORCE_MODE_SEARCH THEN

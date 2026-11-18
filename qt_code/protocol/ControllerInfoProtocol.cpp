@@ -325,3 +325,87 @@ Result ControllerInfoProtocol::readStatusBatch(quint64& lastFrameCounter,
 
     return Result::success();
 }
+
+Result ControllerInfoProtocol::readForceStreamBatch(quint64& lastFrameCounter,
+                                                     ForceStreamBatch& batch)
+{
+    batch = ForceStreamBatch();
+    batch.timestamp = QDateTime::currentDateTime();
+    if (driver_ == nullptr) {
+        return Result::fail(3601, "ZMotionDriver 未初始化");
+    }
+
+    QVector<float> header;
+    Result ret = driver_->getTable(kForceStreamTableBase,
+                                   kForceStreamHeaderFloats, header);
+    if (!ret.ok) return ret;
+    if (header.size() < kForceStreamHeaderFloats) {
+        return Result::fail(3602, "高频Fz header数据不足");
+    }
+
+    const quint64 newest = static_cast<quint64>(static_cast<double>(header[0]));
+    if (newest == 0 || newest <= lastFrameCounter) {
+        return Result::success();
+    }
+
+    const quint64 oldestAvailable =
+        (newest > static_cast<quint64>(kForceStreamRingFrameCapacity))
+            ? newest - kForceStreamRingFrameCapacity + 1 : 1;
+
+    quint64 start;
+    if (lastFrameCounter == 0) {
+        // 首次连接只取最新帧，避免把录制前历史数据写入新文件
+        start = newest;
+    } else {
+        start = qMax(lastFrameCounter + 1, oldestAvailable);
+        if (start > lastFrameCounter + 1) {
+            batch.overflow = true;
+            batch.droppedFrames = start - (lastFrameCounter + 1);
+        }
+    }
+
+    QVector<float> calibration;
+    ret = driver_->getTable(kForceConfigTableBase + kForceScaleOffset,
+                            kForceZeroOffset - kForceScaleOffset + 1,
+                            calibration);
+    if (!ret.ok) return ret;
+    if (calibration.size() < 2) {
+        return Result::fail(3603, "Fz标定参数不足");
+    }
+    const float fzScale = calibration[0];
+    const float fzZero = calibration[kForceZeroOffset - kForceScaleOffset];
+
+    const quint64 totalFrames = newest - start + 1;
+    const int startRing = static_cast<int>((start - 1) % kForceStreamRingFrameCapacity);
+    const int firstSegFrames = static_cast<int>(qMin<quint64>(
+        totalFrames, kForceStreamRingFrameCapacity - startRing));
+    batch.frames.reserve(static_cast<int>(totalFrames));
+
+    for (int seg = 0; seg < 2; ++seg) {
+        const int segFrames = (seg == 0) ? firstSegFrames
+                                         : static_cast<int>(totalFrames) - firstSegFrames;
+        if (segFrames == 0) break;
+
+        const int segRingStart = (seg == 0) ? startRing : 0;
+        const quint64 segFrameBase = (seg == 0) ? start : start + firstSegFrames;
+        QVector<float> raw;
+        ret = driver_->getTable(kForceStreamFrameBase + segRingStart,
+                                segFrames, raw);
+        if (!ret.ok) return ret;
+        if (raw.size() < segFrames) {
+            return Result::fail(3603, "高频Fz帧数据不足");
+        }
+
+        for (int i = 0; i < segFrames; ++i) {
+            ForceStreamFrame frame;
+            frame.frameCounter = segFrameBase + i;
+            frame.hostTimestamp = QDateTime::currentDateTime();
+            frame.fzRaw = raw[i];
+            frame.fzNewton = (frame.fzRaw - fzZero) * fzScale;
+            batch.frames.append(frame);
+        }
+    }
+
+    lastFrameCounter = newest;
+    return Result::success();
+}

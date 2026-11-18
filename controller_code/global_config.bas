@@ -86,6 +86,12 @@ GLOBAL SUB GLOBAL_DEF()
     GLOBAL CONST STATUS_CHANNELS      = 22
     GLOBAL CONST STATUS_SAMPLE_DIV    = 10    ' 每 10ms 在一个伺服周期内批量采集并提交完整帧(100Hz)
 
+    ' 高频Fz独立环形区：每伺服周期写入1个原始码，header最后提交。
+    ' 2048帧在1kHz下覆盖2.048s，Qt按50ms批量读取，不占全通道状态区带宽。
+    GLOBAL CONST TABLE_FORCE_STREAM_BASE  = 29450 ' header: frame_counter + write_index
+    GLOBAL CONST FORCE_STREAM_DATA_BEGIN  = 29452
+    GLOBAL CONST FORCE_STREAM_FRAMES      = 2048  ' 数据末地址31499，TSIZE=34000足够
+
 
     ' ======================================================
     ' Protocol Para
