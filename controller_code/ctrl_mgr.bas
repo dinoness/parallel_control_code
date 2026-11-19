@@ -15,7 +15,7 @@
 
 ' 初始化状态采样、力控默认参数，并注册全工程唯一的伺服周期中断
 GLOBAL SUB STATUS_INIT()
-    DEFINE_CFUNC cfunc_impendance FLOAT impendance_ctrl(FLOAT f_sensor, FLOAT f_ref)
+    DEFINE_CFUNC cfunc_impendance FLOAT impendanceCtrl(FLOAT f_sensor, FLOAT f_ref)
 
 
     LOCAL i
@@ -301,6 +301,7 @@ GLOBAL SUB CTRL_TRACE_STEP()
 
             nominal_pos(0, DPOS(6), DPOS(7), DPOS(8), DPOS(9),  DPOS(10))
             adj_pos(0, 0, 0, 0, 0, 0)
+            ' 搞懂每个变量的含义==========================================================================================
             has_target = 0
             force_contact_count = 0
             force_prev_error = 0
@@ -329,7 +330,8 @@ GLOBAL SUB CTRL_TRACE_STEP()
         RETURN
     ENDIF
 
-    ' 力控计算每个周期执行，即使本周期没有新 PT 点也更新保持目标
+    ' 力控计算每个周期执行，即使本周期没有新PT点也更新保持目标
+    ' force_active是否和exec_force等价？==========================================================================================
     IF force_active = 1 THEN
         IF force_sensor_status <> FORCE_SENSOR_VALID THEN
             CTRL_ABORT(ERR_FORCE_SENSOR_INVALID)
@@ -400,6 +402,7 @@ GLOBAL SUB CTRL_TRACE_STEP()
     can_read = 0
     group_offset = (ctrl_index - TABLE_TRAJ_BEGIN) MOD SIZE_TRAJ_BLOCK
     cur_group = (ctrl_index - TABLE_TRAJ_BEGIN) \ SIZE_TRAJ_BLOCK
+    ' group_offset是什么意思？为什么ELSE后can_read=1===============================================================
     IF group_offset = 0 THEN
         IF MODBUS_REG(REG_TRACE_CMD_STATE_ST + cur_group) = F_DataUpdate THEN
             can_read = 1
@@ -421,12 +424,14 @@ GLOBAL SUB CTRL_TRACE_STEP()
         consume_cmd = 1
 
         IF exec_state = EXEC_NORMAL THEN
+            ' 调整指令的判定顺序==========================================================================
             IF cmd_id = CMD_NONE THEN
                 MODBUS_REG(REG_TRACE_CMD_STATE_ST + cur_group) = F_DataUsed
                 traj_over = 1
                 has_target = 0
                 exec_state = EXEC_WAIT_ALL_IDLE
                 consume_cmd = 0
+                ' 不直接next?，这样可以少用consume_cmd这个变量==========================================================================================
             ELSEIF cmd_id = CMD_MOVE THEN
                 MOVE(TABLE(ctrl_index+1), TABLE(ctrl_index+2), TABLE(ctrl_index+3), TABLE(ctrl_index+4), TABLE(ctrl_index+5))
             ELSEIF cmd_id = CMD_MOVE_ABS THEN
@@ -438,6 +443,7 @@ GLOBAL SUB CTRL_TRACE_STEP()
             ELSEIF cmd_id = CMD_MOVE_DELAY THEN
                 MOVE_DELAY(TABLE(ctrl_index+6))
             ELSEIF cmd_id = CMD_FORCE_CFG THEN
+                ' 需要好好改改，读取力控制指令的状态，太乱了==========================================================================================
                 new_mode = TABLE(ctrl_index+1)
                 target_step = TABLE(ctrl_index+2)
                 max_step = TABLE(ctrl_index+5)
@@ -453,7 +459,7 @@ GLOBAL SUB CTRL_TRACE_STEP()
                         IF force_adjust_limit > TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_MAX_ADJUST) THEN
                             force_adjust_limit = TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_MAX_ADJUST)
                         ENDIF
-                        exec_state = EXEC_WAIT_NORMAL_IDLE
+                        exec_state = EXEC_WAIT_NORMAL_IDLE  '  结合前文，需要保留
                     ENDIF
                 ELSE
                     CTRL_ABORT(ERR_FORCE_PARAM_INVALID)
@@ -464,16 +470,16 @@ GLOBAL SUB CTRL_TRACE_STEP()
                 CTRL_ABORT(ERR_UNKNOWN_CMD)
             ENDIF
 
-        ' 需要完整解释这几个状态都是什么意思，这段没看懂============================================================================
+        ' 力控制模式
         ELSEIF exec_state = EXEC_FORCE THEN
             IF cmd_id = CMD_MOVE_PTABS THEN
-                ' 一条批量赋值读入 5 个目标值，避免 FOR 循环逐条 TABLE 读的语句开销
                 nominal_pos(0, TABLE(ctrl_index+1), TABLE(ctrl_index+2), TABLE(ctrl_index+3), TABLE(ctrl_index+4), TABLE(ctrl_index+5))
                 has_target = 1
             ELSEIF cmd_id = CMD_MOVE_PT THEN
                 nominal_pos(0, nominal_pos(0)+TABLE(ctrl_index+1), nominal_pos(1)+TABLE(ctrl_index+2), nominal_pos(2)+TABLE(ctrl_index+3), nominal_pos(3)+TABLE(ctrl_index+4), nominal_pos(4)+TABLE(ctrl_index+5))
                 has_target = 1
             ELSEIF cmd_id = CMD_FORCE_CFG THEN
+                ' 可简化==========================================================================================
                 new_mode = TABLE(ctrl_index+1)
                 target_step = TABLE(ctrl_index+2)
                 max_step = TABLE(ctrl_index+5)
@@ -512,6 +518,7 @@ GLOBAL SUB CTRL_TRACE_STEP()
         ENDIF
 
         ' 跨组时释放当前组；CMD_NONE 已在上方单独释放且不推进索引
+        ' 能否简化？==========================================================================================
         IF consume_cmd = 1 AND ctrl_running = 1 THEN
             ctrl_index = ctrl_index + SIZE_TRAJ_CMD
             IF group_offset + SIZE_TRAJ_CMD >= SIZE_TRAJ_BLOCK THEN
@@ -522,6 +529,7 @@ GLOBAL SUB CTRL_TRACE_STEP()
     ENDIF
 
     ' 无新点时仍按最新力误差输出保持点；FORCE_OFF 后不再发送零修正 PT
+    ' 能否简化？==========================================================================================
     IF ctrl_running = 1 AND exec_state = EXEC_FORCE AND force_active = 1 AND has_target = 1 THEN
         MOVE_PTABS(1, nominal_pos(0)+adj_pos(0), nominal_pos(1)+adj_pos(1), nominal_pos(2)+adj_pos(2), nominal_pos(3)+adj_pos(3), nominal_pos(4)+adj_pos(4))
     ENDIF
