@@ -65,6 +65,12 @@ void MainWindow::Init()
     ui->cbox_cmd_id->addItem("MOVEABS", kCmdMoveAbs);
     ui->cbox_cmd_id->setCurrentIndex(0);  // 默认 MOVE
 
+    // 数据保存模式下拉框：索引 0=All channels，1=High-fre Force（与 currentIndex()==1 的判断对应）
+    ui->cbox_data_save_mode->clear();
+    ui->cbox_data_save_mode->addItem("All channels");
+    ui->cbox_data_save_mode->addItem("High-fre Force");
+    ui->cbox_data_save_mode->setCurrentIndex(0);  // 默认 All channels
+
     // 速度输入框：单位 mm/s，范围 (0, kMaxManualSpeedMmPs]
     ui->ledit_speed->setText("5");
     ui->ledit_speed->setValidator(

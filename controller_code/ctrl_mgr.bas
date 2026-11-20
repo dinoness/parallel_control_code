@@ -142,16 +142,6 @@ GLOBAL SUB FORCE_SAMPLE()
     force_hw_sample_count = cfunc_force_sample()
 END SUB
 
-' ' 空载去皮：只能在未接触且 CTRL 未运行时调用；硬件原始值必须先有效
-' GLOBAL SUB FORCE_TARE()
-'     IF force_sensor_status = FORCE_SENSOR_VALID AND ctrl_running = 0 THEN
-'         TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_ZERO) = force_raw(2)
-'         PRINT "力传感器 Fz 零位已更新"
-'     ELSE
-'         PRINT "拒绝去皮：请确认传感器有效、工具未接触且 CTRL 已停止"
-'     ENDIF
-' END SUB
-
 ' 状态采样：每 10ms 在一个伺服周期内用一条 TABLE 指令提交完整 16 通道帧(100Hz)。
 ' 布局：[0-4] dL；[5-9] 扭矩；[10-14] 末端位姿；[15] ee_valid。
 ' 力信号只走 TABLE 29450+ 的 1kHz 环形区（C 侧写入），本帧不再携带；
@@ -258,7 +248,7 @@ END SUB
 ' 每伺服周期执行一次的非阻塞混合轨迹状态机
 ' BASE(6,7,8,9,10) 由 SERVO_CYCLE 在本任务首个周期统一设置，此处不再重复
 GLOBAL SUB CTRL_TRACE_STEP()
-    LOCAL cur_group, group_offset, cmd_id, can_read, consume_cmd
+    LOCAL cur_group, group_offset, cmd_id, can_read, consume_cmd  ' group_offset当前指令在 100 条组内的偏移
     LOCAL max_step, target_step, new_mode, ctrl_para_result
 
 
@@ -318,37 +308,10 @@ GLOBAL SUB CTRL_TRACE_STEP()
         RETURN
     ENDIF
 
-    ' 每周期向C写入当前位姿；C返回传感器状态，并把五维调整量写到 TABLE 调整量区
-    IF force_active = 1 THEN
-        IF force_sensor_status <> FORCE_SENSOR_VALID THEN
-            CTRL_ABORT(ERR_FORCE_SENSOR_INVALID)
-            RETURN
-        ENDIF
-
-        ' 力输入与位姿都由 C 侧直接读取（ForceSample 的 g_fz_raw、motionrt_getpuldpos），无需 BASIC 中转
-        force_sensor_status = cfunc_force_mgr()
-        IF force_sensor_status = FORCE_SENSOR_OVERLIMIT THEN
-            CTRL_ABORT(ERR_FORCE_OVERLIMIT)
-            RETURN
-        ELSEIF force_sensor_status <> FORCE_SENSOR_VALID THEN
-            CTRL_ABORT(ERR_FORCE_SENSOR_INVALID)
-            RETURN
-        ENDIF
-
-        ' 一条批量读回五维调整量，避免 FOR 循环逐条 TABLE 读的语句开销
-        adj_pos(0, TABLE(TABLE_FORCE_ADJ_BEGIN), TABLE(TABLE_FORCE_ADJ_BEGIN + 1), TABLE(TABLE_FORCE_ADJ_BEGIN + 2), TABLE(TABLE_FORCE_ADJ_BEGIN + 3), TABLE(TABLE_FORCE_ADJ_BEGIN + 4))
-
-        ' 保持点与新点统一在此下发；新名义目标从下一拍生效（1ms 滞后，对保持/栅格无影响）
-        IF has_target = 1 THEN
-            MOVE_PTABS(1, nominal_pos(0)+adj_pos(0), nominal_pos(1)+adj_pos(1), nominal_pos(2)+adj_pos(2), nominal_pos(3)+adj_pos(3), nominal_pos(4)+adj_pos(4))
-        ENDIF
-    ENDIF
-
     ' 每周期最多读取一条指令；新组未就绪时，力控段保持上一名义目标
     can_read = 0
     group_offset = (ctrl_index - TABLE_TRAJ_BEGIN) MOD SIZE_TRAJ_BLOCK
     cur_group = (ctrl_index - TABLE_TRAJ_BEGIN) \ SIZE_TRAJ_BLOCK
-    ' group_offset是什么意思？为什么ELSE后can_read=1===============================================================
     IF group_offset = 0 THEN
         IF MODBUS_REG(REG_TRACE_CMD_STATE_ST + cur_group) = F_DataUpdate THEN
             can_read = 1
@@ -400,7 +363,6 @@ GLOBAL SUB CTRL_TRACE_STEP()
                 has_target = 0
                 exec_state = EXEC_WAIT_ALL_IDLE
                 consume_cmd = 0
-                ' 不直接next?，这样可以少用consume_cmd这个变量==========================================================================================
             ELSEIF cmd_id = CMD_MOVE THEN
                 MOVE(TABLE(ctrl_index+1), TABLE(ctrl_index+2), TABLE(ctrl_index+3), TABLE(ctrl_index+4), TABLE(ctrl_index+5))
             ELSEIF cmd_id = CMD_MOVE_ABS THEN
@@ -455,7 +417,6 @@ GLOBAL SUB CTRL_TRACE_STEP()
         ENDIF
 
         ' 跨组时释放当前组；CMD_NONE 已在上方单独释放且不推进索引
-        ' 能否简化？==========================================================================================
         IF consume_cmd = 1 AND ctrl_running = 1 THEN
             ctrl_index = ctrl_index + SIZE_TRAJ_CMD
             IF group_offset + SIZE_TRAJ_CMD >= SIZE_TRAJ_BLOCK THEN
@@ -465,5 +426,30 @@ GLOBAL SUB CTRL_TRACE_STEP()
         ENDIF
     ENDIF
 
-    ' 保持点/新点下发已并入上方 force_active 块（has_target 判断后统一 MOVE_PTABS）
+    ' 力控计算与发点放在指令消费之后：本拍读到的新名义目标当拍生效，无 1ms 滞后。
+    ' 过力/传感器异常在本块内触发 CTRL_ABORT，晚于指令消费半个块无实际影响
+    IF force_active = 1 THEN
+        IF force_sensor_status <> FORCE_SENSOR_VALID THEN
+            CTRL_ABORT(ERR_FORCE_SENSOR_INVALID)
+            RETURN
+        ENDIF
+
+        ' 力输入与位姿都由 C 侧直接读取（ForceSample 的 g_fz_raw、motionrt_getpuldpos），无需 BASIC 中转
+        force_sensor_status = cfunc_force_mgr()
+        IF force_sensor_status = FORCE_SENSOR_OVERLIMIT THEN
+            CTRL_ABORT(ERR_FORCE_OVERLIMIT)
+            RETURN
+        ELSEIF force_sensor_status <> FORCE_SENSOR_VALID THEN
+            CTRL_ABORT(ERR_FORCE_SENSOR_INVALID)
+            RETURN
+        ENDIF
+
+        ' 一条批量读回五维调整量，避免 FOR 循环逐条 TABLE 读的语句开销
+        adj_pos(0, TABLE(TABLE_FORCE_ADJ_BEGIN), TABLE(TABLE_FORCE_ADJ_BEGIN + 1), TABLE(TABLE_FORCE_ADJ_BEGIN + 2), TABLE(TABLE_FORCE_ADJ_BEGIN + 3), TABLE(TABLE_FORCE_ADJ_BEGIN + 4))
+
+        ' 保持点与新点统一在此下发
+        IF has_target = 1 THEN
+            MOVE_PTABS(1, nominal_pos(0)+adj_pos(0), nominal_pos(1)+adj_pos(1), nominal_pos(2)+adj_pos(2), nominal_pos(3)+adj_pos(3), nominal_pos(4)+adj_pos(4))
+        ENDIF
+    ENDIF
 END SUB
