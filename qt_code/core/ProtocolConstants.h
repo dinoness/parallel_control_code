@@ -62,19 +62,21 @@ constexpr int kRegCartJogStatusBase  = 70;    // 指令执行状态REG地址 (70
 // 力传感器标定（与 controller_code/global_config.bas 同步）
 // ===================================================================
 
-constexpr int kForceConfigTableBase = 400;
-constexpr int kForceScaleOffset     = 9;   // TABLE(409)：Fz 原始值到 N 的比例
-constexpr int kForceZeroOffset      = 10;  // TABLE(410)：Fz 空载原始零位
+constexpr int kForceConfigTableBase = 410;
+constexpr int kForceScaleOffset     = 9;   // TABLE(419)：Fz 原始值到 N 的比例
+constexpr int kForceZeroOffset      = 10;  // TABLE(420)：Fz 空载原始零位
+constexpr int kForceGToolTable      = 427;  // TABLE(427)：水平放置时的 Fz 原始码
+constexpr int kForceGToolFlashId    = 1;    // FLASH 块1：持久保存 g_tool
+constexpr int kForceGToolSampleCount = 500; // 工具重力标定连续采样数
+constexpr int kForceAdjTableBase    = 428;  // TABLE(428..432)：dx,dy,dz,dphi,dtheta
+constexpr int kForcePoseTableBase   = 433;  // TABLE(433..437)：x,y,z,phi,theta
 
 // ===================================================================
 // End Tool（末端工具）
 // ===================================================================
 
-constexpr int kRevolutionSpeedTable  = 450;  // 公转电机目标转速，单位 rpm
-constexpr int kRotationSpeedTable    = 451;  // 自转电机目标转速，单位 rpm
-constexpr int kRotationCurrentTable  = 452;  // 自转运行电流，单位 mA
-constexpr int kDefaultRotationCurrentMa = 450;
-constexpr int kMaxRotationCurrentMa = 65535;  // UINT16 上限，实际上限由 EC1 型号决定
+constexpr int kRevolutionSpeedTable  = 400;  // 公转电机目标转速，单位 rpm
+constexpr int kRotationSpeedTable    = 401;  // 自转电机目标转速，单位 rpm
 
 // ===================================================================
 // Traj
@@ -133,7 +135,7 @@ constexpr int kCmdMovePtabs = 10;
 constexpr int kCmdMoveDelay = 20;
 
 // CTRL 混合轨迹的段控制指令，记录仍为 7 个 float：
-// FORCE_CFG = [30, mode, target_N, contact_N, ramp_N_s, max_adjust_um, reserved]
+// FORCE_CFG = [30, mode, target_N, contact_N, ramp_step_N, max_adjust_um, reserved]
 constexpr int kCmdForceCfg  = 30;
 constexpr int kCmdForceOff  = 31;
 constexpr int kForceModeSearch = 1;
@@ -179,15 +181,15 @@ constexpr int kSensorDefaultUploadIntervalMs = 20;
 // 机器人状态显示（状态数据 TABLE 环形缓冲）
 // ===================================================================
 
-// 控制器每 10 个伺服周期（1kHz 总线 → 100Hz）用一条 TABLE 指令采集一帧 22 通道状态数据
+// 控制器每 10 个伺服周期（1kHz 总线 → 100Hz）用一条 TABLE 指令采集一帧 16 通道状态数据
 // TABLE[21000..21001] 为 2 个 float64 的 header：[frame_counter, write_index]
 // frame_counter 单调递增，0 表示控制器尚未开始采样（总线初始化未完成）
-// TABLE[21002+] 为帧区，384 帧 × 22 个 float，帧号 f 的环形位置 = (f-1) % 384
-// 100Hz 下覆盖 3.84s，最后使用 TABLE[29449]
+// TABLE[21002+] 为帧区，384 帧 × 16 个 float，帧号 f 的环形位置 = (f-1) % 384
+// 100Hz 下覆盖 3.84s，实际占用至 TABLE[27145]；力信号不进本区，只走 29450+ 的 1kHz 环形区
 constexpr int kStatusTableBase = 21000;
 constexpr int kStatusHeaderFloats = 2;
 constexpr int kStatusFrameBase = 21002;      // kStatusTableBase + kStatusHeaderFloats
-constexpr int kStatusChannelCount = 22;
+constexpr int kStatusChannelCount = 16;
 constexpr int kStatusRingFrameCapacity = 384;
 constexpr int kStatusUploadIntervalMs = 100;
 

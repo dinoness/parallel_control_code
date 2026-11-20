@@ -9,7 +9,7 @@ ToolProtocol::ToolProtocol(ZMotionDriver* driver)
 
 Result ToolProtocol::startRevolution(float rpm)
 {
-    return startTool(kRevolutionSpeedTable, rpm, kEventRevolutionStart, false, 0);
+    return startTool(kRevolutionSpeedTable, rpm, kEventRevolutionStart);
 }
 
 Result ToolProtocol::stopRevolution()
@@ -17,9 +17,9 @@ Result ToolProtocol::stopRevolution()
     return stopTool(kEventRevolutionStop);
 }
 
-Result ToolProtocol::startRotation(float rpm, int currentMa)
+Result ToolProtocol::startRotation(float rpm)
 {
-    return startTool(kRotationSpeedTable, rpm, kEventRotationStart, true, currentMa);
+    return startTool(kRotationSpeedTable, rpm, kEventRotationStart);
 }
 
 Result ToolProtocol::stopRotation()
@@ -27,8 +27,7 @@ Result ToolProtocol::stopRotation()
     return stopTool(kEventRotationStop);
 }
 
-Result ToolProtocol::startTool(int tableAddr, float rpm, int startEvent,
-                               bool setCurrent, int currentMa)
+Result ToolProtocol::startTool(int tableAddr, float rpm, int startEvent)
 {
     if (driver_ == nullptr) {
         return Result::fail(3901, "ZMotionDriver 未初始化");
@@ -41,10 +40,6 @@ Result ToolProtocol::startTool(int tableAddr, float rpm, int startEvent,
             QString("工具转速需为非零值，且绝对值不超过 %1 rpm")
                 .arg(kMaxToolSpeedRpm));
     }
-    if (setCurrent && (currentMa <= 0 || currentMa > kMaxRotationCurrentMa)) {
-        return Result::fail(3905,
-            QString("自转电流需为 1-%1 mA 的整数").arg(kMaxRotationCurrentMa));
-    }
 
     uint16_t sysState = 0;
     Result ret = driver_->readModbusReg(kRegSystemState, sysState);
@@ -55,13 +50,6 @@ Result ToolProtocol::startTool(int tableAddr, float rpm, int startEvent,
     if (!canStart) {
         return Result::fail(3904,
             QString("当前系统状态不允许启动末端工具 (当前=%1)").arg(sysState));
-    }
-
-    // 自转启动时先下发电流，控制器收到启动事件后写入 0x2300:00
-    if (setCurrent) {
-        float current = static_cast<float>(currentMa);
-        ret = driver_->setTable(kRotationCurrentTable, 1, &current);
-        if (!ret.ok) return ret;
     }
 
     // 保留转速符号，控制器根据正负号控制电机方向

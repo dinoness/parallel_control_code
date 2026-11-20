@@ -257,20 +257,7 @@ Result ControllerInfoProtocol::readStatusBatch(quint64& lastFrameCounter,
         }
     }
 
-    // 4. 读取 Fz 标定参数：TABLE(409)=比例，TABLE(410)=空载零位
-    QVector<float> calibration;
-    ret = driver_->getTable(kForceConfigTableBase + kForceScaleOffset,
-                            kForceZeroOffset - kForceScaleOffset + 1,
-                            calibration);
-    if (!ret.ok) return ret;
-    if (calibration.size() < 2) {
-        return Result::fail(3603,
-            QString("Fz 标定参数不足: 期望=2 实际=%1").arg(calibration.size()));
-    }
-    const float fzScale = calibration[0];
-    const float fzZero = calibration[kForceZeroOffset - kForceScaleOffset];
-
-    // 5. start..newest 按环形位置分一到两段连续区间批量读取
+    // 4. start..newest 按环形位置分一到两段连续区间批量读取
     // 帧号 f 的环形位置 = (f-1) % 容量
     int startRing = static_cast<int>((start - 1) % kStatusRingFrameCapacity);
     quint64 totalFrames = newest - start + 1;
@@ -297,7 +284,7 @@ Result ControllerInfoProtocol::readStatusBatch(quint64& lastFrameCounter,
                     .arg(floatCount).arg(raw.size()));
         }
 
-        // 6. 逐帧解析填充 StatusSampleFrame
+        // 5. 逐帧解析填充 StatusSampleFrame（16 通道，不含力信号）
         for (int i = 0; i < static_cast<int>(segFrames); ++i) {
             const float* ch = raw.constData() + i * kStatusChannelCount;
 
@@ -311,10 +298,6 @@ Result ControllerInfoProtocol::readStatusBatch(quint64& lastFrameCounter,
                 frame.ee[j]      = ch[10 + j];  // 末端位姿 x,y,z(um), phi,theta(角秒)
             }
             frame.eeValid = (ch[15] > 0.5f);
-            for (int j = 0; j < 6; ++j) {
-                frame.forceRaw[j] = ch[16 + j];
-            }
-            frame.fzNewton = (frame.forceRaw[2] - fzZero) * fzScale;
 
             batch.frames.append(frame);
         }
@@ -408,4 +391,16 @@ Result ControllerInfoProtocol::readForceStreamBatch(quint64& lastFrameCounter,
 
     lastFrameCounter = newest;
     return Result::success();
+}
+
+Result ControllerInfoProtocol::saveGToolCalibration(float gToolRaw)
+{
+    if (driver_ == nullptr) {
+        return Result::fail(3901, "ZMotionDriver 未初始化");
+    }
+
+    Result ret = driver_->setTable(kForceGToolTable, 1, &gToolRaw);
+    if (!ret.ok) return ret;
+
+    return driver_->writeFlash(kForceGToolFlashId, 1, &gToolRaw);
 }

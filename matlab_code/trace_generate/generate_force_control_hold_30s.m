@@ -15,7 +15,7 @@
 clc; clear; close all;
 
 %% 位姿与时间参数
-start_pos = [0, 0, -750];        % 力控理论位置 (mm)
+start_pos = [0, 0, -793];        % 力控理论位置 (mm)
 final_pos = [0, 0, -720];        % 最终位置 (mm)
 phi       = 0;                   % 绕 Z 轴转角 (°)
 theta     = 0;                   % 绕 Y 轴转角 (°)
@@ -23,17 +23,17 @@ hold_time = 30;                  % 力控保持时间 (s)
 dt        = 1e-3;                % PT 指令周期 (s)
 
 %% 力控参数（上机前请根据传感器标定和试验要求确认）
-force_mode       = 2;            % 1=接触搜索，2=恒力保持
-force_target_N   = 5;          % 目标力 (N)，示例值
-force_contact_N  = 2;          % 接触判定阈值 (N)，仅接触搜索模式使用
-force_ramp_N_s   = 1.0;          % 目标力变化率 (N/s)，必须大于 0
-max_adjust_um    = 50000.0;       % 本次轨迹允许的最大 Z 修正量 (μm)
+force_mode        = 2;           % 1=接触搜索，2=恒力保持
+force_target_N    = 5;           % 目标力 (N)，示例值
+force_contact_N   = 2;           % 接触判定阈值及接触前参考力 (N)
+force_ramp_step_N = 0.001;       % 每控制周期的目标力变化量 (N/周期)，必须大于 0
+max_adjust_um     = 50000.0;     % 本次轨迹允许的最大 Z 修正量 (μm)
 
 %% 参数校验
 assert(hold_time > 0 && dt > 0, '保持时间和指令周期必须大于 0');
 assert(force_mode == 1 || force_mode == 2, '力控模式只能为 1 或 2');
 assert(force_target_N >= 0, '目标力不能为负数');
-assert(force_ramp_N_s > 0, '目标力变化率必须大于 0');
+assert(force_ramp_step_N > 0, '每周期的目标力变化量必须大于 0');
 assert(max_adjust_um > 0, '最大 Z 修正量必须大于 0');
 if force_mode == 1
     assert(force_contact_N > 0, '接触搜索模式的接触判定阈值必须大于 0');
@@ -47,9 +47,9 @@ assert(abs(N_hold * dt - hold_time) < 1e-9, ...
 % 1) MOVEABS 到力控理论位置；MOVEABS 不使用第 7 字段，因此设为 0
 start_cmd = [2; start_pos(:) * 1e3; phi; theta; 0];
 
-% 2) FORCE_CFG = [30, mode, target_N, contact_N, ramp_N_s, max_adjust_um, reserved]
+% 2) FORCE_CFG = [30, mode, target_N, contact_N, ramp_step_N, max_adjust_um, reserved]
 force_cfg_cmd = [30; force_mode; force_target_N; force_contact_N; ...
-    force_ramp_N_s; max_adjust_um; 0];
+    force_ramp_step_N; max_adjust_um; 0];
 
 % 3) 力控段只接受 PT/PTABS、FORCE_CFG、FORCE_OFF，不能用 MOVE_DELAY 保持。
 %    每个保持点 ticks=1，重复 N_hold 次对应 30 s 的名义理论位置流。

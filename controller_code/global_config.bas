@@ -29,8 +29,8 @@ GLOBAL SUB GLOBAL_DEF()
     ' 末端工具指令区与公转轴参数。
     ' ATYPE=66 时通过 DAC 调速，EtherCAT 速度模式的 DAC 单位为脉冲数/秒。
     ' 公转电机为23位编码器，直驱且驱动器无额外电子齿轮缩放时，每转为2^23脉冲。
-    GLOBAL CONST TABLE_REVOLUTION_SPEED = 450
-    GLOBAL CONST TABLE_ROTATION_SPEED   = 451
+    GLOBAL CONST TABLE_REVOLUTION_SPEED = 400
+    GLOBAL CONST TABLE_ROTATION_SPEED   = 401
     GLOBAL CONST TOOL_REVOLUTION_AXIS   = 5
     GLOBAL CONST MAX_TOOL_SPEED_RPM     = 2000
     GLOBAL CONST TOOL_REV_PULSES_PER_REV = 8388608.0
@@ -47,31 +47,33 @@ GLOBAL SUB GLOBAL_DEF()
     GLOBAL CONST TOOL_ROT_ENABLE_MS      = 10
     GLOBAL CONST TOOL_ROT_DIR_MS         = 1
 
-    ' 力传感器适配与控制参数，TABLE 400-419。
-    ' 控制路径只读参数（enable/标定/滤波/PI/限幅/阈值）；valid/sample_count/原始值
-    ' 仅为 10ms 低频调试镜像（供 ZDevelop 观察），控制与断流检测走全局变量。
-    ' 第一阶段 enable=1 用于采集显示，PI 增益保持0，不进行闭环力控。
-    GLOBAL CONST TABLE_FORCE_CFG_BEGIN   = 400
+    ' 力传感器适配与控制参数，TABLE 410-426；已删除滤波系数和PI增益。
+    ' valid/sample_count/原始值仅为10ms低频调试镜像，控制与断流检测走全局变量。
+    GLOBAL CONST TABLE_FORCE_CFG_BEGIN   = 410
     GLOBAL CONST FORCE_CFG_ENABLE        = 0   ' 1=启用传感器适配层（10ms 刷新进 force_enabled）
     GLOBAL CONST FORCE_CFG_VALID         = 1   ' 调试镜像：1=节点在线（10ms 刷新）
     GLOBAL CONST FORCE_CFG_SAMPLE_COUNT  = 2   ' 调试镜像：采样序号（10ms 刷新）
-    GLOBAL CONST FORCE_CFG_RAW_BEGIN     = 3   ' 3-8: Fx,Fy,Fz,Mx,My,Mz 原始值（仅 405=Fz 作调试镜像，10ms 刷新）
-    GLOBAL CONST FORCE_CFG_SCALE         = 9   ' Fz 原始值到 N 的比例，可带符号
-    GLOBAL CONST FORCE_CFG_ZERO          = 10  ' Fz 空载原始零位
-    GLOBAL CONST FORCE_CFG_FILTER_ALPHA  = 11  ' 一阶低通系数，合法范围 (0,1] 由参数配置侧保证
-    GLOBAL CONST FORCE_CFG_KP            = 12  ' 增量式 PI 比例系数
-    GLOBAL CONST FORCE_CFG_KI            = 13  ' 增量式 PI 积分系数
-    GLOBAL CONST FORCE_CFG_MAX_FORCE     = 14  ' 过力保护阈值(N)
-    GLOBAL CONST FORCE_CFG_MAX_ADJUST    = 15  ' 修正量硬限幅(um)
-    GLOBAL CONST FORCE_CFG_MAX_ADJ_RATE  = 16  ' 修正速度限幅(um/s)
-    GLOBAL CONST FORCE_CFG_CONTACT_TICKS = 17  ' 接触阈值连续成立周期数
-    GLOBAL CONST FORCE_CFG_DIRECTION     = 18  ' Z 修正方向，只能为 +1 或 -1
-    GLOBAL CONST FORCE_CFG_STALE_TICKS   = 19  ' 断流阈值，单位 10ms（断流检测在 10ms 低频段执行）
+    GLOBAL CONST FORCE_CFG_RAW_BEGIN     = 3   ' 413-418: Fx,Fy,Fz,Mx,My,Mz 原始值（仅415=Fz作调试镜像）
+    GLOBAL CONST FORCE_CFG_SCALE         = 9   ' 419: Fz原始值到N的比例，可带符号
+    GLOBAL CONST FORCE_CFG_ZERO          = 10  ' 420: Fz空载原始零位
+    GLOBAL CONST FORCE_CFG_MAX_FORCE     = 11  ' 421: 过力保护阈值(N)
+    GLOBAL CONST FORCE_CFG_MAX_ADJUST    = 12  ' 422: 修正量硬限幅(um)
+    GLOBAL CONST FORCE_CFG_MAX_ADJ_RATE  = 13  ' 423: 修正速度限幅(um/s)
+    GLOBAL CONST FORCE_CFG_CONTACT_TICKS = 14  ' 424: 接触阈值连续成立周期数
+    GLOBAL CONST FORCE_CFG_DIRECTION     = 15  ' 425: Z修正方向，只能为+1或-1
+    GLOBAL CONST FORCE_CFG_STALE_TICKS   = 16  ' 426: 断流阈值，单位10ms
+
+    ' 力控标定与输入输出区：g_tool为水平放置时的Fz原始码。
+    GLOBAL CONST TABLE_FORCE_G_TOOL      = 427
+    GLOBAL CONST FLASH_FORCE_G_TOOL      = 1    ' FLASH块1：持久保存g_tool原始码
+    GLOBAL CONST TABLE_FORCE_ADJ_BEGIN   = 428  ' 428-432: C写dx,dy,dz,dphi,dtheta
+    GLOBAL CONST TABLE_FORCE_POSE_BEGIN  = 433  ' 433-437 保留：位姿改由 C 侧直接读 DPOS，不再经 TABLE 中转
+    GLOBAL CONST FORCE_ANGLE_TO_RAD      = 3.141592653589793 / 3600000.0  ' 角秒转rad
 
     ' 总线节点0-5为驱动器，节点6为EK1100，节点7为EL3702；Fz 接 EL3702 CH1。
     ' 仅使用标准 AIN。总线周期 1ms 与伺服周期 1:1，每周期必有新记录，不读 CycleCounter；
     ' EL3702 原生输出有符号 INT16（±10V 对应 ±32767），ZMC 侧 AIN 若按无符号返回，
-    ' 由 FORCE_SAMPLE 用算术回绕恢复，无需端子侧配置。
+    ' 由 C 侧 ForceSample 用算术回绕恢复，无需端子侧配置。
     ' 注意：EL3702 为超采样端子，超采样系数须为 1，否则 AIN(33) 只是块内第一个（最旧）采样。
     GLOBAL CONST FORCE_NODE              = 7
     GLOBAL CONST FORCE_AIN_BASE          = 32  ' AIN(33)=CH1模拟量；AIN(32)=CycleCounter 不再读取；起始编号须为8的倍数
@@ -79,14 +81,14 @@ GLOBAL SUB GLOBAL_DEF()
     GLOBAL CONST FORCE_ADC_FULL_SCALE    = 32768    ' EL3702 ±10V 对应有符号16位满量程
     GLOBAL CONST FORCE_FZ_DEFAULT_SCALE  = FORCE_FZ_FULL_SCALE_N / FORCE_ADC_FULL_SCALE
 
-    ' 状态监控环形区：384 帧 × 22 通道
+    ' 状态监控环形区：384 帧 × 16 通道；力信号只走 29450+ 的 1kHz 环形区，本帧不再携带
     GLOBAL CONST TABLE_STATUS_BASE    = 21000
     GLOBAL CONST STATUS_HEADER_FLOATS = 2     ' frame_counter + write_index
     GLOBAL CONST STATUS_RING_FRAMES   = 384   ' 100Hz 下覆盖 3.84s
-    GLOBAL CONST STATUS_CHANNELS      = 22
+    GLOBAL CONST STATUS_CHANNELS      = 16
     GLOBAL CONST STATUS_SAMPLE_DIV    = 10    ' 每 10ms 在一个伺服周期内批量采集并提交完整帧(100Hz)
 
-    ' 高频Fz独立环形区：每伺服周期写入1个原始码，header最后提交。
+    ' 高频Fz独立环形区：C 侧 ForceSample 每伺服周期写入1个原始码，header最后提交。
     ' 2048帧在1kHz下覆盖2.048s，Qt按50ms批量读取，不占全通道状态区带宽。
     GLOBAL CONST TABLE_FORCE_STREAM_BASE  = 29450 ' header: frame_counter + write_index
     GLOBAL CONST FORCE_STREAM_DATA_BEGIN  = 29452
@@ -148,7 +150,7 @@ GLOBAL SUB GLOBAL_DEF()
     GLOBAL CONST CMD_MOVE_PT     = 9
     GLOBAL CONST CMD_MOVE_PTABS  = 10
     GLOBAL CONST CMD_MOVE_DELAY  = 20
-    GLOBAL CONST CMD_FORCE_CFG   = 30  ' mode,target_N,contact_N,ramp_N_s,max_adjust_um,reserved
+    GLOBAL CONST CMD_FORCE_CFG   = 30  ' mode,target_N,contact_N,ramp_step_N,max_adjust_um,reserved
     GLOBAL CONST CMD_FORCE_OFF   = 31
 
     ' CTRL 混合轨迹执行状态

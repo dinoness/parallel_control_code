@@ -77,9 +77,6 @@ void MainWindow::Init()
         new QDoubleValidator(-kMaxToolSpeedRpm, kMaxToolSpeedRpm, 2, this));
     ui->ledit_rotation_speed->setValidator(
         new QDoubleValidator(-kMaxToolSpeedRpm, kMaxToolSpeedRpm, 2, this));
-    ui->ledit_rotation_current->setText(QString::number(kDefaultRotationCurrentMa));
-    ui->ledit_rotation_current->setValidator(
-        new QIntValidator(1, kMaxRotationCurrentMa, this));
     resetToolUi();
 
     updateMotionModeDisplay();
@@ -109,10 +106,14 @@ void MainWindow::Init()
                     robotModeActive_ = false;
                     updateRobotModeButtons();
 
-                    // 断线时停止数据录制，避免文件句柄悬挂
+                    // 断线时停止数据录制和未完成的工具重力标定
                     if (dataSaving_) {
                         stopDataSave();
                     }
+                    gToolCalibrating_ = false;
+                    gToolRawSum_ = 0.0;
+                    gToolSampleCount_ = 0;
+                    ui->btn_g_tool_calib->setEnabled(true);
 
                     // 断线时复位运动模式相关 UI 状态，
                     // 避免在模式中断线后重连时 ENTER 全部锁死、无法退出
@@ -176,11 +177,19 @@ void MainWindow::Init()
                          << "dropped:" << batch.droppedFrames;
             });
 
-    // ── 1kHz高频Fz：只保存，不替代现有低频全通道UI显示 ──
+    // ── 1kHz高频Fz：工具重力标定与数据保存共用连续原始帧 ──
     connect(ctx_->controllerInfoService(), &ControllerInfoService::forceStreamBatchReceived,
             this, [this](const ForceStreamBatch& batch) {
                 if (batch.overflow) {
                     qDebug() << "Force stream overflow, dropped:" << batch.droppedFrames;
+                    if (gToolCalibrating_) {
+                        gToolCalibrating_ = false;
+                        ui->btn_g_tool_calib->setEnabled(true);
+                        ui->statusbar->showMessage("工具重力标定失败：采样不连续", 5000);
+                        QMessageBox::warning(this, "工具重力标定失败",
+                            QString("高频力数据丢失 %1 帧，请重新标定。")
+                                .arg(batch.droppedFrames));
+                    }
                     if (dataSaving_ && dataSaveHighFrequency_) {
                         const quint64 dropped = batch.droppedFrames;
                         stopDataSave();
@@ -190,6 +199,40 @@ void MainWindow::Init()
                         return;
                     }
                 }
+
+                // 力信号显示：只取每批接收的第一帧（约 20Hz 刷新），录制仍写全量帧
+                if (!batch.frames.isEmpty()) {
+                    ui->label_ee_fz->setText(
+                        QString::number(batch.frames.first().fzNewton, 'f', 3));
+                }
+
+                if (gToolCalibrating_) {
+                    for (const ForceStreamFrame& frame : batch.frames) {
+                        if (gToolSampleCount_ >= kForceGToolSampleCount) break;
+                        gToolRawSum_ += frame.fzRaw;
+                        ++gToolSampleCount_;
+                    }
+                    ui->statusbar->showMessage(
+                        QString("工具重力标定采样中：%1/%2")
+                            .arg(gToolSampleCount_).arg(kForceGToolSampleCount));
+
+                    if (gToolSampleCount_ == kForceGToolSampleCount) {
+                        const float gToolRaw = static_cast<float>(
+                            gToolRawSum_ / kForceGToolSampleCount);
+                        Result ret = ctx_->controllerInfoProtocol()->saveGToolCalibration(gToolRaw);
+                        gToolCalibrating_ = false;
+                        ui->btn_g_tool_calib->setEnabled(true);
+                        if (!ret.ok) {
+                            QMessageBox::warning(this, "工具重力标定失败", ret.message);
+                        } else {
+                            ui->statusbar->showMessage("工具重力标定完成", 5000);
+                            QMessageBox::information(this, "工具重力标定完成",
+                                QString("500 点平均原始值：%1\n已写入 TABLE(%2) 和 FLASH 块 %3。")
+                                    .arg(gToolRaw).arg(kForceGToolTable).arg(kForceGToolFlashId));
+                        }
+                    }
+                }
+
                 if (!dataSaving_ || !dataSaveHighFrequency_) return;
 
                 for (const ForceStreamFrame& frame : batch.frames) {
@@ -240,15 +283,11 @@ void MainWindow::Init()
                     ui->label_ee_theta->setText("-");
                 }
 
-                // 力信号与末端位姿有效性无关，始终显示最新换算值
-                ui->label_ee_fz->setText(QString::number(frame.fzNewton, 'f', 3));
-
-                // ── All channels：保持现有100Hz全通道保存 ──
+                // ── All channels：保持现有100Hz全通道保存（不含力信号列，力数据走 High-fre Force） ──
                 if (dataSaving_ && !dataSaveHighFrequency_) {
                     for (const StatusSampleFrame& f : batch.frames) {
                         dataSaveStream_ << f.frameCounter << ','
-                                        << (f.frameCounter * 10) << ','  // 100Hz 采样，帧号×10=相对毫秒
-                                        << QString::number(f.fzNewton, 'f', 3) << ',';
+                                        << (f.frameCounter * 10) << ',';  // 100Hz 采样，帧号×10=相对毫秒
                         for (int i = 0; i < 5; ++i) {
                             dataSaveStream_ << QString::number(f.dL[i], 'f', 3) << ',';
                         }
@@ -1289,14 +1328,7 @@ void MainWindow::on_btn_rotation_clicked()
         return;
     }
 
-    bool currentOk = false;
-    const int currentMa = ui->ledit_rotation_current->text().toInt(&currentOk);
-    if (!currentOk) {
-        QMessageBox::warning(this, "参数错误", "请输入有效的自转电流（整数，单位 mA）");
-        return;
-    }
-
-    Result ret = ctx_->toolService()->startRotation(rpm, currentMa);
+    Result ret = ctx_->toolService()->startRotation(rpm);
     if (!ret.ok) {
         QMessageBox::warning(this, "自转启动失败", ret.message);
         return;
@@ -1305,9 +1337,24 @@ void MainWindow::on_btn_rotation_clicked()
     rotationRunning_ = true;
     updateRotationUi();
     ui->statusbar->showMessage(
-        QString("自转启动指令已下发：%1 rpm，%2 mA").arg(rpm).arg(currentMa), 3000);
-    qDebug() << "Rotation start command sent, rpm =" << rpm
-             << "current(mA) =" << currentMa;
+        QString("自转启动指令已下发：%1 rpm").arg(rpm), 3000);
+    qDebug() << "Rotation start command sent, rpm =" << rpm;
+}
+
+void MainWindow::on_btn_g_tool_calib_clicked()
+{
+    if (!ctx_->connectionService()->isConnected()) {
+        QMessageBox::warning(this, "错误", "控制器未连接");
+        return;
+    }
+    if (gToolCalibrating_) return;
+
+    gToolCalibrating_ = true;
+    gToolRawSum_ = 0.0;
+    gToolSampleCount_ = 0;
+    ui->btn_g_tool_calib->setEnabled(false);
+    ui->statusbar->showMessage(
+        QString("工具重力标定采样中：0/%1").arg(kForceGToolSampleCount));
 }
 
 
@@ -1384,8 +1431,8 @@ void MainWindow::on_btn_data_save_clicked()
         // High-fre Force：1kHz，时间为本文件首帧起的相对毫秒
         dataSaveStream_ << "frame_counter,time_ms,fz_raw,fz_N\n";
     } else {
-        // All channels：保持现有100Hz全通道格式
-        dataSaveStream_ << "frame_counter,time_ms,fz_N,"
+        // All channels：100Hz 状态帧格式，不含力信号列（力数据用 High-fre Force 录制）
+        dataSaveStream_ << "frame_counter,time_ms,"
                            "dL1_um,dL2_um,dL3_um,dL4_um,dL5_um,"
                            "torque1_permille,torque2_permille,torque3_permille,torque4_permille,torque5_permille,"
                            "ee_x_um,ee_y_um,ee_z_um,ee_phi_arcsec,ee_theta_arcsec,ee_valid\n";

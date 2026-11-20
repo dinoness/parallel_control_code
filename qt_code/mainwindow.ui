@@ -1416,7 +1416,7 @@
     <property name="geometry">
      <rect>
       <x>900</x>
-      <y>670</y>
+      <y>640</y>
       <width>101</width>
       <height>31</height>
      </rect>
@@ -1429,7 +1429,7 @@
     <property name="geometry">
      <rect>
       <x>1020</x>
-      <y>670</y>
+      <y>640</y>
       <width>101</width>
       <height>31</height>
      </rect>
@@ -1442,7 +1442,7 @@
     <property name="geometry">
      <rect>
       <x>900</x>
-      <y>520</y>
+      <y>530</y>
       <width>101</width>
       <height>21</height>
      </rect>
@@ -1455,7 +1455,7 @@
     <property name="geometry">
      <rect>
       <x>1020</x>
-      <y>520</y>
+      <y>530</y>
       <width>111</width>
       <height>21</height>
      </rect>
@@ -1468,7 +1468,7 @@
     <property name="geometry">
      <rect>
       <x>800</x>
-      <y>550</y>
+      <y>560</y>
       <width>101</width>
       <height>21</height>
      </rect>
@@ -1481,7 +1481,7 @@
     <property name="geometry">
      <rect>
       <x>800</x>
-      <y>630</y>
+      <y>600</y>
       <width>101</width>
       <height>31</height>
      </rect>
@@ -1494,7 +1494,7 @@
     <property name="geometry">
      <rect>
       <x>900</x>
-      <y>550</y>
+      <y>560</y>
       <width>101</width>
       <height>31</height>
      </rect>
@@ -1504,7 +1504,7 @@
     <property name="geometry">
      <rect>
       <x>1020</x>
-      <y>550</y>
+      <y>560</y>
       <width>101</width>
       <height>31</height>
      </rect>
@@ -1514,7 +1514,7 @@
     <property name="geometry">
      <rect>
       <x>800</x>
-      <y>670</y>
+      <y>640</y>
       <width>101</width>
       <height>31</height>
      </rect>
@@ -1527,7 +1527,7 @@
     <property name="geometry">
      <rect>
       <x>900</x>
-      <y>630</y>
+      <y>600</y>
       <width>101</width>
       <height>31</height>
      </rect>
@@ -1540,36 +1540,13 @@
     <property name="geometry">
      <rect>
       <x>1020</x>
-      <y>630</y>
+      <y>600</y>
       <width>101</width>
       <height>31</height>
      </rect>
     </property>
     <property name="text">
      <string>OFF</string>
-    </property>
-   </widget>
-   <widget class="QLabel" name="label_52">
-    <property name="geometry">
-     <rect>
-      <x>800</x>
-      <y>590</y>
-      <width>191</width>
-      <height>31</height>
-     </rect>
-    </property>
-    <property name="text">
-     <string>Current(mA)  deprecated</string>
-    </property>
-   </widget>
-   <widget class="QLineEdit" name="ledit_rotation_current">
-    <property name="geometry">
-     <rect>
-      <x>1020</x>
-      <y>590</y>
-      <width>101</width>
-      <height>31</height>
-     </rect>
     </property>
    </widget>
    <widget class="QLabel" name="label_53">
@@ -1668,6 +1645,19 @@
       <width>191</width>
       <height>31</height>
      </rect>
+    </property>
+   </widget>
+   <widget class="QPushButton" name="btn_g_tool_calib">
+    <property name="geometry">
+     <rect>
+      <x>900</x>
+      <y>490</y>
+      <width>221</width>
+      <height>31</height>
+     </rect>
+    </property>
+    <property name="text">
+     <string>Tool Gravity Calib</string>
     </property>
    </widget>
   </widget>

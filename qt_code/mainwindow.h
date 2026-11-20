@@ -73,6 +73,7 @@ private slots:
     // End Tool（末端工具）
     void on_btn_revolution_clicked();
     void on_btn_rotation_clicked();
+    void on_btn_g_tool_calib_clicked();
 
     // Control
     void on_btn_pause_resume_clicked();
@@ -133,6 +134,11 @@ private:
     bool robotModeActive_ = false;
     bool revolutionRunning_ = false;
     bool rotationRunning_ = false;
+
+    // ── 工具重力标定 ──────────────────────────────────
+    bool gToolCalibrating_ = false;
+    double gToolRawSum_ = 0.0;
+    int gToolSampleCount_ = 0;
 
     // ── 数据保存 ──────────────────────────────────────
     bool dataSaving_ = false;

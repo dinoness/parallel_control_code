@@ -173,6 +173,25 @@ Result ZMotionDriver::setTable(int start, int count, const float* data)
 }
 
 
+Result ZMotionDriver::writeFlash(uint16 flashId, int count, const float* data)
+{
+    QMutexLocker locker(&mutex_);
+
+    if (!opened_ || handle_ == nullptr) {
+        return Result::fail(1011, "控制器未连接，无法写 FLASH");
+    }
+
+    int ret = ZAux_FlashWritef(handle_, flashId, static_cast<uint32>(count),
+                               const_cast<float*>(data));
+    if (ret != 0) {
+        return Result::fail(ret,
+            QString("写 FLASH 块 %1 失败，错误码=%2").arg(flashId).arg(ret));
+    }
+
+    return Result::success();
+}
+
+
 Result ZMotionDriver::writeModbusReg(int addr, uint16 value)
 {
     QMutexLocker locker(&mutex_);

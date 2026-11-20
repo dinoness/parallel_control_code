@@ -9,16 +9,19 @@
 '    FORCE_CFG 和 FORCE_OFF。CMD_NONE 前必须显式 FORCE_OFF。
 ' 4. 力控段内部统一维护 nominal_pos，最终使用 ticks=1 的 MOVE_PTABS 输出
 '    nominal_pos + adj_pos，避免相对 PT 重复累加修正量。
-' 5. EL3702 通过标准 AIN 和 TABLE 400-419 适配，第一阶段仅采集显示且 PI 增益为0；
-'    未接入硬件、数据断流或过力时禁止进入/继续力控。当前仅对 Z 施加增量式 PI 修正。
+' 5. EL3702 通过标准 AIN 和 TABLE 410-426 适配，力控算法逐步迁移至C；
+'    未接入硬件、数据断流或过力时禁止进入/继续力控。
 ' ================================================================
 
 ' 初始化状态采样、力控默认参数，并注册全工程唯一的伺服周期中断
 GLOBAL SUB STATUS_INIT()
-    DEFINE_CFUNC cfunc_impendance FLOAT impendanceCtrl(FLOAT f_sensor, FLOAT f_ref)
+    DEFINE_CFUNC cfunc_ctrl_init INT CtrlInit()
+    DEFINE_CFUNC cfunc_ctrl_para INT CtrlPara(FLOAT f_target, FLOAT contact_threshold, FLOAT ramp_step, FLOAT max_adjust)
+    DEFINE_CFUNC cfunc_ctrl_clear INT CtrlClear()
+    DEFINE_CFUNC cfunc_force_sample INT ForceSample()
+    DEFINE_CFUNC cfunc_force_mgr INT ForceCtrlMgr()
 
-
-    LOCAL i
+    LOCAL i, ctrl_init_result, g_tool_flash
     PRINT "统一状态采样与 CTRL 混合轨迹任务启动"
     DL_BASE_CAPTURE()
     ee_valid = 0
@@ -36,15 +39,13 @@ GLOBAL SUB STATUS_INIT()
     force_target_cmd = 0
     force_target_effective = 0
     force_contact_threshold = 0
-    force_ramp_rate = 0
+    force_ramp_step = 0
     force_adjust_limit = 0
     force_contact_count = 0
     force_prev_error = 0
     buffer_wait_ticks = 0
     has_target = 0
 
-    force_normal = 0
-    force_filtered = 0
     force_sensor_status = FORCE_SENSOR_DISABLED
     force_last_sample_count = -1
     force_stale_ticks = 0
@@ -54,24 +55,32 @@ GLOBAL SUB STATUS_INIT()
         nominal_pos(i) = 0
         adj_pos(i) = 0
     NEXT
-    FOR i = 0 TO 5
-        force_raw(i) = 0
-    NEXT
 
-    ' 第一阶段只采集和显示：启用硬件适配，PI增益保持0；比例是理论初值，需实测校准。
-    ' 末位断流阈值单位为 10ms（断流检测已降频到 10ms 低频维护段执行）
-    TABLE(TABLE_FORCE_CFG_BEGIN, 1, 0, 0, 0, 0, 0, 0, 0, 0, FORCE_FZ_DEFAULT_SCALE, 0.0, 1.0, 0.0, 0.0, 50.0, 5000.0, 1000.0, 5, 1.0, 1)
+    ' TABLE 410-426保留给硬件适配、显示换算和低频维护。
+    ' C侧标度、过力阈值和接触判定周期数使用固定宏，不再读取这些参数。
+    TABLE(TABLE_FORCE_CFG_BEGIN, 1, 0, 0, 0, 0, 0, 0, 0, 0, FORCE_FZ_DEFAULT_SCALE, 0.0, 50.0, 5000.0, 1000.0, 5, 1.0, 1)
+    ' 启动时恢复Qt标定并写入FLASH块1的g_tool原始码
+    FLASH_READ FLASH_FORCE_G_TOOL, g_tool_flash
+    TABLE(TABLE_FORCE_G_TOOL) = g_tool_flash
+
+    ctrl_init_result = cfunc_ctrl_init()
+    IF ctrl_init_result <> 0 THEN
+        PRINT "C力控模块初始化失败，返回值: ", ctrl_init_result
+    ENDIF
 
     TABLE(TABLE_STATUS_BASE) = 0
     TABLE(TABLE_STATUS_BASE + 1) = 0
-    force_stream_count = 0
-    force_stream_write_index = 0
-    TABLE(TABLE_FORCE_STREAM_BASE, 0, 0)
+    ' 高频Fz环形区由 C 侧 ForceSample 独占写入，header 在 CtrlInit 中清零
     INT_CYCLE(1, TASK_CTRL, SERVO_CYCLE)
 END SUB
 
 ' 统一伺服周期入口：力传感器采集与适配优先，状态采样常驻
 GLOBAL SUB SERVO_CYCLE()
+    ' BASE 是任务级参数，本中断任务只在首个周期设置一次，之后不再重复
+    IF servo_base_ready = 0 THEN
+        BASE(6,7,8,9,10)
+        servo_base_ready = 1
+    ENDIF
     FORCE_SAMPLE()
     IF ctrl_running = 1 AND ctrl_paused = 0 THEN
         CTRL_TRACE_STEP()
@@ -87,41 +96,37 @@ GLOBAL SUB DL_BASE_CAPTURE()
     NEXT
 END SUB
 
-' 力传感器采集与适配（单函数，分高频热路径和 10ms 低频维护两段）。
-' 热路径（每伺服周期）：AIN(33) 直读 Fz 原始值 -> 无分支补码转换 -> 标定滤波一条语句 -> 过力判断。
+' 力传感器采集与适配。
+' 热路径（每伺服周期，一条语句）：C 侧 ForceSample 完成使能判断、AIN(33) 采集、
+'   无分支补码转换和 1kHz 环形区（TABLE 29450+）写入，返回采样计数供断流检测；
+'   采集、上传和力控计算在 C 内同周期同源。
 ' 低频维护（借用 STATUS_SAMPLE 的分频计数，status_tick=5 触发，错开 tick=9 的状态帧写周期）：
-'   NODE_STATUS、ENABLE 读取、断流检测、状态细分、TABLE(401/402/405) 调试镜像。
-' 总线周期 1ms 与伺服周期 1:1，每周期必有新记录，不再读 CycleCounter。
-' 参数保留在 TABLE 400-419 以便上位机/在线调参，不用 GLOBAL CONST。
+'   NODE_STATUS、ENABLE 读取、断流检测、状态细分。
+' 总线周期 1ms 与伺服周期 1:1，每周期必有新记录，不读 CycleCounter。
+' 参数保留在 TABLE 410-426 以便上位机/在线调参，不用 GLOBAL CONST。
 GLOBAL SUB FORCE_SAMPLE()
-    LOCAL fz_raw
-
     ' ---- 10ms 低频维护 ----
     IF status_tick = 5 THEN
-        ' 节点在线状态，10ms 响应
+        ' 节点在线状态，10ms 响应；掉线时置 INVALID 拦截力控，C 侧热路径不再判断节点
         IF NODE_STATUS(BUS_SLOT, FORCE_NODE) = 1 THEN
             force_hw_valid = 1
         ELSE
             force_hw_valid = 0
         ENDIF
-        ' 适配启停参数，10ms 响应
+        ' 适配启停参数，10ms 响应（C 侧 ForceSample 每周期直读 TABLE(410)，此处仅用于状态细分）
         IF TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_ENABLE) = 0 THEN
             force_enabled = 0
         ELSE
             force_enabled = 1
         ENDIF
-        ' 断流检测：10ms 内采样序号未前进则累计一拍；TABLE(419) 阈值单位为 10ms
+        ' 断流检测：10ms 内采样序号未前进则累计一拍；TABLE(426) 阈值单位为 10ms
         IF force_hw_sample_count = force_last_sample_count THEN
             force_stale_ticks = force_stale_ticks + 1
         ELSE
             force_last_sample_count = force_hw_sample_count
             force_stale_ticks = 0
         ENDIF
-        ' 调试镜像：仅供 ZDevelop 观察，控制路径不依赖这些 TABLE
-        TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_VALID) = force_hw_valid
-        TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_SAMPLE_COUNT) = force_hw_sample_count
-        TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_RAW_BEGIN + 2) = force_raw(2)
-        ' 状态细分；OVERLIMIT 由热路径置位且随即触发 CTRL_ABORT，此处覆盖回 VALID 无控制影响
+        ' 状态细分；OVERLIMIT 由 C 侧置位且随即触发 CTRL_ABORT，此处覆盖回 VALID 无控制影响
         IF force_enabled = 0 THEN
             force_sensor_status = FORCE_SENSOR_DISABLED
         ELSEIF force_hw_valid = 0 THEN
@@ -133,43 +138,23 @@ GLOBAL SUB FORCE_SAMPLE()
         ENDIF
     ENDIF
 
-    ' ---- 热路径：每伺服周期执行 ----
-    IF force_enabled = 1 AND force_hw_valid = 1 THEN
-        ' 无分支补码转换：AIN 无论按有符号还是无符号返回 16 位原始码都正确
-        fz_raw = (AIN(FORCE_AIN_BASE + 1) + 32768) MOD 65536 - 32768
-        force_raw(2) = fz_raw
-        force_hw_sample_count = force_hw_sample_count + 1
-
-        ' ' 独立高频流：每伺服周期保存1帧，先写数据再提交header。
-        ' TABLE(FORCE_STREAM_DATA_BEGIN + force_stream_write_index) = fz_raw
-        ' force_stream_write_index = (force_stream_write_index + 1) MOD FORCE_STREAM_FRAMES
-        ' force_stream_count = force_stream_count + 1
-        ' TABLE(TABLE_FORCE_STREAM_BASE, force_stream_count, force_stream_write_index)
-
-        ' 标定 + 一阶低通合并为一条；alpha 的合法范围 (0,1] 由参数配置侧保证
-        force_filtered = force_filtered + TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_FILTER_ALPHA) * ((fz_raw - TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_ZERO)) * TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_SCALE) - force_filtered)
-        ' 传感器启用时，过力保护覆盖 CTRL 的普通段和力控段
-        IF ctrl_running = 1 AND ABS(force_filtered) > TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_MAX_FORCE) THEN
-            force_sensor_status = FORCE_SENSOR_OVERLIMIT
-        ENDIF
-    ENDIF
+    ' ---- 热路径：每伺服周期执行；使能判断在 C 内（TABLE(410)=0 时不采样、计数停） ----
+    force_hw_sample_count = cfunc_force_sample()
 END SUB
 
-' 空载去皮：只能在未接触且 CTRL 未运行时调用；硬件原始值必须先有效
-GLOBAL SUB FORCE_TARE()
-    IF force_sensor_status = FORCE_SENSOR_VALID AND ctrl_running = 0 THEN
-        TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_ZERO) = force_raw(2)
-        force_normal = 0
-        force_filtered = 0
-        force_prev_error = 0
-        PRINT "力传感器 Fz 零位已更新"
-    ELSE
-        PRINT "拒绝去皮：请确认传感器有效、工具未接触且 CTRL 已停止"
-    ENDIF
-END SUB
+' ' 空载去皮：只能在未接触且 CTRL 未运行时调用；硬件原始值必须先有效
+' GLOBAL SUB FORCE_TARE()
+'     IF force_sensor_status = FORCE_SENSOR_VALID AND ctrl_running = 0 THEN
+'         TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_ZERO) = force_raw(2)
+'         PRINT "力传感器 Fz 零位已更新"
+'     ELSE
+'         PRINT "拒绝去皮：请确认传感器有效、工具未接触且 CTRL 已停止"
+'     ENDIF
+' END SUB
 
-' 状态采样：每 10ms 在一个伺服周期内用一条 TABLE 指令提交完整 22 通道帧(100Hz)。
-' 布局：[0-4] dL；[5-9] 扭矩；[10-14] 末端位姿；[15] ee_valid；[16-21] 六轴力原始值。
+' 状态采样：每 10ms 在一个伺服周期内用一条 TABLE 指令提交完整 16 通道帧(100Hz)。
+' 布局：[0-4] dL；[5-9] 扭矩；[10-14] 末端位姿；[15] ee_valid。
+' 力信号只走 TABLE 29450+ 的 1kHz 环形区（C 侧写入），本帧不再携带；
 ' 不上传编码器及滤波力、目标力、修正量等派生状态；header 最后更新以保证帧完整。
 GLOBAL SUB STATUS_SAMPLE()
     LOCAL base_addr
@@ -180,9 +165,9 @@ GLOBAL SUB STATUS_SAMPLE()
         base_addr = TABLE_STATUS_BASE + STATUS_HEADER_FLOATS + status_write_index * STATUS_CHANNELS
 
         IF ee_valid = 1 THEN
-            TABLE(base_addr, MPOS(0)-dl_base(0), MPOS(1)-dl_base(1), MPOS(2)-dl_base(2), MPOS(3)-dl_base(3), MPOS(4)-dl_base(4), DRIVE_TORQUE(0), DRIVE_TORQUE(1), DRIVE_TORQUE(2), DRIVE_TORQUE(3), DRIVE_TORQUE(4), DPOS(6), DPOS(7), DPOS(8), DPOS(9), DPOS(10), 1, force_raw(0), force_raw(1), force_raw(2), force_raw(3), force_raw(4), force_raw(5))
+            TABLE(base_addr, MPOS(0)-dl_base(0), MPOS(1)-dl_base(1), MPOS(2)-dl_base(2), MPOS(3)-dl_base(3), MPOS(4)-dl_base(4), DRIVE_TORQUE(0), DRIVE_TORQUE(1), DRIVE_TORQUE(2), DRIVE_TORQUE(3), DRIVE_TORQUE(4), DPOS(6), DPOS(7), DPOS(8), DPOS(9), DPOS(10), 1)
         ELSE
-            TABLE(base_addr, MPOS(0)-dl_base(0), MPOS(1)-dl_base(1), MPOS(2)-dl_base(2), MPOS(3)-dl_base(3), MPOS(4)-dl_base(4), DRIVE_TORQUE(0), DRIVE_TORQUE(1), DRIVE_TORQUE(2), DRIVE_TORQUE(3), DRIVE_TORQUE(4), 0, 0, 0, 0, 0, 0, force_raw(0), force_raw(1), force_raw(2), force_raw(3), force_raw(4), force_raw(5))
+            TABLE(base_addr, MPOS(0)-dl_base(0), MPOS(1)-dl_base(1), MPOS(2)-dl_base(2), MPOS(3)-dl_base(3), MPOS(4)-dl_base(4), DRIVE_TORQUE(0), DRIVE_TORQUE(1), DRIVE_TORQUE(2), DRIVE_TORQUE(3), DRIVE_TORQUE(4), 0, 0, 0, 0, 0, 0)
         ENDIF
 
         ' 完整帧写完后再提交 header
@@ -196,6 +181,7 @@ END SUB
 GLOBAL SUB CTRL_MOVE()
     LOCAL i
     PRINT "CTRL 混合轨迹启动"
+    cfunc_ctrl_clear()
     has_target = 0
     traj_over = 0
     ctrl_paused = 0
@@ -231,6 +217,7 @@ GLOBAL SUB CTRL_MOVE_END()
     force_state = FORCE_MODE_IDLE
     force_target_effective = 0
     exec_state = EXEC_NORMAL
+    cfunc_ctrl_clear()
     FOR i = 0 TO 4
         adj_pos(i) = 0
     NEXT
@@ -269,11 +256,11 @@ GLOBAL SUB CTRL_MOVE_RESUME()
 END SUB
 
 ' 每伺服周期执行一次的非阻塞混合轨迹状态机
+' BASE(6,7,8,9,10) 由 SERVO_CYCLE 在本任务首个周期统一设置，此处不再重复
 GLOBAL SUB CTRL_TRACE_STEP()
-    LOCAL i, cur_group, group_offset, cmd_id, can_read, consume_cmd
-    LOCAL dt_sec, force_error, adj_step, max_step, target_step, new_mode
+    LOCAL cur_group, group_offset, cmd_id, can_read, consume_cmd
+    LOCAL max_step, target_step, new_mode, ctrl_para_result
 
-    BASE(6,7,8,9,10)
 
     ' 传感器启用时，过力保护覆盖 CTRL 的普通段和力控段
     IF force_sensor_status = FORCE_SENSOR_OVERLIMIT THEN
@@ -284,31 +271,21 @@ GLOBAL SUB CTRL_TRACE_STEP()
     ' 阶段等待只查询 IDLE，不在周期中断中阻塞
     IF exec_state = EXEC_WAIT_NORMAL_IDLE THEN
         IF IDLE(6) AND IDLE(7) AND IDLE(8) AND IDLE(9) AND IDLE(10) THEN
-            ' IF force_sensor_status <> FORCE_SENSOR_VALID THEN
-            '     CTRL_ABORT(ERR_FORCE_SENSOR_INVALID)
-            '     RETURN
-            ' ENDIF
-            ' ' 这些条件都是什么意思：不超时，不过量程，不调整过大，控制变化率===========================================================
-            ' IF TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_CONTACT_TICKS) < 1 OR TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_MAX_FORCE) <= 0 OR TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_MAX_ADJUST) <= 0 OR TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_MAX_ADJ_RATE) <= 0 THEN
-            '     CTRL_ABORT(ERR_FORCE_PARAM_INVALID)
-            '     RETURN
-            ' ENDIF
-            ' ' z修正方向是hyw（估计是用了绝对值+符号）================================================================================
-            ' IF TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_DIRECTION) <> 1 AND TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_DIRECTION) <> -1 THEN
-            '     CTRL_ABORT(ERR_FORCE_PARAM_INVALID)
-            '     RETURN
-            ' ENDIF
+            ' 普通运动结束后才配置C力控，并读取本次水平标定的g_tool
+            ctrl_para_result = cfunc_ctrl_para(force_target_cmd, force_contact_threshold, force_ramp_step, force_adjust_limit)
+            IF ctrl_para_result <> 0 THEN
+                CTRL_ABORT(ERR_FORCE_PARAM_INVALID)
+                RETURN
+            ENDIF
 
-            nominal_pos(0, DPOS(6), DPOS(7), DPOS(8), DPOS(9),  DPOS(10))
+            nominal_pos(0, DPOS(6), DPOS(7), DPOS(8), DPOS(9), DPOS(10))
             adj_pos(0, 0, 0, 0, 0, 0)
-            ' 搞懂每个变量的含义==========================================================================================
             has_target = 0
-            force_contact_count = 0
-            force_prev_error = 0
-            force_target_effective = 0
             force_state = force_cfg_mode
             force_active = 1
             exec_state = EXEC_FORCE
+            ' 进入拍只完成初始化，力控计算与指令消费从下一拍开始，避免单拍尖峰
+            RETURN
         ELSE
             RETURN
         ENDIF
@@ -316,8 +293,6 @@ GLOBAL SUB CTRL_TRACE_STEP()
         IF IDLE(6) AND IDLE(7) AND IDLE(8) AND IDLE(9) AND IDLE(10) THEN
             adj_pos(0, 0, 0, 0, 0, 0)
             force_state = FORCE_MODE_IDLE
-            force_target_effective = 0
-            force_prev_error = 0
             exec_state = EXEC_NORMAL
         ELSE
             RETURN
@@ -330,64 +305,9 @@ GLOBAL SUB CTRL_TRACE_STEP()
         RETURN
     ENDIF
 
-    ' 力控计算每个周期执行，即使本周期没有新PT点也更新保持目标
-    ' force_active是否和exec_force等价？==========================================================================================
-    IF force_active = 1 THEN
-        IF force_sensor_status <> FORCE_SENSOR_VALID THEN
-            CTRL_ABORT(ERR_FORCE_SENSOR_INVALID)
-            RETURN
-        ENDIF
-
-        ' dt_sec = SERVO_PERIOD / 1000000.0
-        ' IF force_state = FORCE_MODE_SEARCH THEN
-        '     IF ABS(force_filtered) >= force_contact_threshold THEN
-        '         force_contact_count = force_contact_count + 1
-        '     ELSE
-        '         force_contact_count = 0
-        '     ENDIF
-        '     IF force_contact_count >= TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_CONTACT_TICKS) THEN
-        '         force_state = FORCE_MODE_HOLD
-        '     ENDIF
-        ' ENDIF
-
-        ' 这段是基于力误差，计算调整量=============
-        IF force_state = FORCE_MODE_HOLD THEN
-            ' target_step = force_ramp_rate * dt_sec
-            ' IF force_target_effective < force_target_cmd THEN
-            '     force_target_effective = force_target_effective + target_step
-            '     IF force_target_effective > force_target_cmd THEN
-            '         force_target_effective = force_target_cmd
-            '     ENDIF
-            ' ELSEIF force_target_effective > force_target_cmd THEN
-            '     force_target_effective = force_target_effective - target_step
-            '     IF force_target_effective < force_target_cmd THEN
-            '         force_target_effective = force_target_cmd
-            '     ENDIF
-            ' ENDIF
-
-            ' force_error = force_target_effective - force_filtered
-            ' adj_step = TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_KP) * (force_error - force_prev_error) + TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_KI) * force_error * dt_sec
-            ' max_step = TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_MAX_ADJ_RATE) * dt_sec
-            ' IF adj_step > max_step THEN
-            '     adj_step = max_step
-            ' ELSEIF adj_step < -max_step THEN
-            '     adj_step = -max_step
-            ' ENDIF
-            ' adj_pos(2) = adj_pos(2) + TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_DIRECTION) * adj_step
-            ' IF adj_pos(2) > force_adjust_limit THEN
-            '     adj_pos(2) = force_adjust_limit
-            ' ELSEIF adj_pos(2) < -force_adjust_limit THEN
-            '     adj_pos(2) = -force_adjust_limit
-            ' ENDIF
-            ' force_prev_error = force_error
-            adj_pos(2) = cfunc_impendance(force_filtered, force_target_cmd)
-        ELSE
-            force_prev_error = 0
-        ENDIF
-    ENDIF
-
-    ' 运动指令在缓冲满时会在中断内阻塞并直接导致 1034 超时，必须保留至少两个缓冲位置后再读取和下发
+    ' 缓冲余量检查提前：缓冲满时 MOVE_PTABS 会在中断内阻塞并直接导致 1034 超时
     ' REMAIN_BUFFER 的括号参数是运动类型而不是轴号；省略类型并显式指定虚拟主轴 6
+    ' 缓冲不足时本周期的力控计算与指令消费一起跳过；缓冲几乎不会满，停一拍无影响
     IF REMAIN_BUFFER AXIS(6) <= 2 THEN
         IF force_active = 1 THEN
             buffer_wait_ticks = buffer_wait_ticks + 1
@@ -396,6 +316,32 @@ GLOBAL SUB CTRL_TRACE_STEP()
             ENDIF
         ENDIF
         RETURN
+    ENDIF
+
+    ' 每周期向C写入当前位姿；C返回传感器状态，并把五维调整量写到 TABLE 调整量区
+    IF force_active = 1 THEN
+        IF force_sensor_status <> FORCE_SENSOR_VALID THEN
+            CTRL_ABORT(ERR_FORCE_SENSOR_INVALID)
+            RETURN
+        ENDIF
+
+        ' 力输入与位姿都由 C 侧直接读取（ForceSample 的 g_fz_raw、motionrt_getpuldpos），无需 BASIC 中转
+        force_sensor_status = cfunc_force_mgr()
+        IF force_sensor_status = FORCE_SENSOR_OVERLIMIT THEN
+            CTRL_ABORT(ERR_FORCE_OVERLIMIT)
+            RETURN
+        ELSEIF force_sensor_status <> FORCE_SENSOR_VALID THEN
+            CTRL_ABORT(ERR_FORCE_SENSOR_INVALID)
+            RETURN
+        ENDIF
+
+        ' 一条批量读回五维调整量，避免 FOR 循环逐条 TABLE 读的语句开销
+        adj_pos(0, TABLE(TABLE_FORCE_ADJ_BEGIN), TABLE(TABLE_FORCE_ADJ_BEGIN + 1), TABLE(TABLE_FORCE_ADJ_BEGIN + 2), TABLE(TABLE_FORCE_ADJ_BEGIN + 3), TABLE(TABLE_FORCE_ADJ_BEGIN + 4))
+
+        ' 保持点与新点统一在此下发；新名义目标从下一拍生效（1ms 滞后，对保持/栅格无影响）
+        IF has_target = 1 THEN
+            MOVE_PTABS(1, nominal_pos(0)+adj_pos(0), nominal_pos(1)+adj_pos(1), nominal_pos(2)+adj_pos(2), nominal_pos(3)+adj_pos(3), nominal_pos(4)+adj_pos(4))
+        ENDIF
     ENDIF
 
     ' 每周期最多读取一条指令；新组未就绪时，力控段保持上一名义目标
@@ -424,8 +370,31 @@ GLOBAL SUB CTRL_TRACE_STEP()
         consume_cmd = 1
 
         IF exec_state = EXEC_NORMAL THEN
-            ' 调整指令的判定顺序==========================================================================
-            IF cmd_id = CMD_NONE THEN
+            IF cmd_id = CMD_FORCE_CFG THEN
+                ' 普通段先缓存参数，等待已有运动结束后再调用CtrlPara
+                new_mode = TABLE(ctrl_index+1)
+                target_step = TABLE(ctrl_index+2)
+                max_step = TABLE(ctrl_index+5)
+                IF (new_mode = FORCE_MODE_SEARCH OR new_mode = FORCE_MODE_HOLD) AND target_step >= 0 AND TABLE(ctrl_index+3) > 0 AND TABLE(ctrl_index+4) > 0 AND max_step > 0 THEN
+                    force_cfg_mode = new_mode
+                    force_target_cmd = target_step
+                    force_contact_threshold = TABLE(ctrl_index+3)
+                    force_ramp_step = TABLE(ctrl_index+4)
+                    force_adjust_limit = max_step
+                    IF force_adjust_limit > TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_MAX_ADJUST) THEN
+                        force_adjust_limit = TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_MAX_ADJUST)
+                    ENDIF
+                    exec_state = EXEC_WAIT_NORMAL_IDLE
+                ELSE
+                    CTRL_ABORT(ERR_FORCE_PARAM_INVALID)
+                ENDIF
+            ELSEIF cmd_id = CMD_MOVE_PT THEN
+                MOVE_PT(TABLE(ctrl_index+6), TABLE(ctrl_index+1), TABLE(ctrl_index+2), TABLE(ctrl_index+3), TABLE(ctrl_index+4), TABLE(ctrl_index+5))
+            ELSEIF cmd_id = CMD_MOVE_PTABS THEN
+                MOVE_PTABS(TABLE(ctrl_index+6), TABLE(ctrl_index+1), TABLE(ctrl_index+2), TABLE(ctrl_index+3), TABLE(ctrl_index+4), TABLE(ctrl_index+5))
+            ELSEIF cmd_id = CMD_FORCE_OFF THEN
+                ' 普通段中的 FORCE_OFF 是无操作，便于轨迹模板复用
+            ELSEIF cmd_id = CMD_NONE THEN
                 MODBUS_REG(REG_TRACE_CMD_STATE_ST + cur_group) = F_DataUsed
                 traj_over = 1
                 has_target = 0
@@ -436,76 +405,44 @@ GLOBAL SUB CTRL_TRACE_STEP()
                 MOVE(TABLE(ctrl_index+1), TABLE(ctrl_index+2), TABLE(ctrl_index+3), TABLE(ctrl_index+4), TABLE(ctrl_index+5))
             ELSEIF cmd_id = CMD_MOVE_ABS THEN
                 MOVEABS(TABLE(ctrl_index+1), TABLE(ctrl_index+2), TABLE(ctrl_index+3), TABLE(ctrl_index+4), TABLE(ctrl_index+5))
-            ELSEIF cmd_id = CMD_MOVE_PT THEN
-                MOVE_PT(TABLE(ctrl_index+6), TABLE(ctrl_index+1), TABLE(ctrl_index+2), TABLE(ctrl_index+3), TABLE(ctrl_index+4), TABLE(ctrl_index+5))
-            ELSEIF cmd_id = CMD_MOVE_PTABS THEN
-                MOVE_PTABS(TABLE(ctrl_index+6), TABLE(ctrl_index+1), TABLE(ctrl_index+2), TABLE(ctrl_index+3), TABLE(ctrl_index+4), TABLE(ctrl_index+5))
             ELSEIF cmd_id = CMD_MOVE_DELAY THEN
                 MOVE_DELAY(TABLE(ctrl_index+6))
-            ELSEIF cmd_id = CMD_FORCE_CFG THEN
-                ' 需要好好改改，读取力控制指令的状态，太乱了==========================================================================================
-                new_mode = TABLE(ctrl_index+1)
-                target_step = TABLE(ctrl_index+2)
-                max_step = TABLE(ctrl_index+5)
-                IF (new_mode = FORCE_MODE_SEARCH OR new_mode = FORCE_MODE_HOLD) AND target_step >= 0 AND TABLE(ctrl_index+4) > 0 AND max_step > 0 THEN
-                    IF new_mode = FORCE_MODE_SEARCH AND TABLE(ctrl_index+3) <= 0 THEN
-                        CTRL_ABORT(ERR_FORCE_PARAM_INVALID)
-                    ELSE
-                        force_cfg_mode = new_mode
-                        force_target_cmd = target_step
-                        force_contact_threshold = TABLE(ctrl_index+3)
-                        force_ramp_rate = TABLE(ctrl_index+4)
-                        force_adjust_limit = max_step
-                        IF force_adjust_limit > TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_MAX_ADJUST) THEN
-                            force_adjust_limit = TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_MAX_ADJUST)
-                        ENDIF
-                        exec_state = EXEC_WAIT_NORMAL_IDLE  '  结合前文，需要保留
-                    ENDIF
-                ELSE
-                    CTRL_ABORT(ERR_FORCE_PARAM_INVALID)
-                ENDIF
-            ELSEIF cmd_id = CMD_FORCE_OFF THEN
-                ' 普通段中的 FORCE_OFF 是无操作，便于轨迹模板复用
             ELSE
                 CTRL_ABORT(ERR_UNKNOWN_CMD)
             ENDIF
 
         ' 力控制模式
         ELSEIF exec_state = EXEC_FORCE THEN
-            IF cmd_id = CMD_MOVE_PTABS THEN
+            IF cmd_id = CMD_FORCE_CFG THEN
+                ' 重新配置当前力控段，C侧会清除接触状态和阻抗历史
+                new_mode = TABLE(ctrl_index+1)
+                target_step = TABLE(ctrl_index+2)
+                max_step = TABLE(ctrl_index+5)
+                IF (new_mode = FORCE_MODE_SEARCH OR new_mode = FORCE_MODE_HOLD) AND target_step >= 0 AND TABLE(ctrl_index+3) > 0 AND TABLE(ctrl_index+4) > 0 AND max_step > 0 THEN
+                    force_cfg_mode = new_mode
+                    force_state = new_mode
+                    force_target_cmd = target_step
+                    force_contact_threshold = TABLE(ctrl_index+3)
+                    force_ramp_step = TABLE(ctrl_index+4)
+                    force_adjust_limit = max_step
+                    ctrl_para_result = cfunc_ctrl_para(force_target_cmd, force_contact_threshold, force_ramp_step, force_adjust_limit)
+                    IF ctrl_para_result <> 0 THEN
+                        CTRL_ABORT(ERR_FORCE_PARAM_INVALID)
+                        RETURN
+                    ENDIF
+                    adj_pos(0, 0, 0, 0, 0, 0)
+                ELSE
+                    CTRL_ABORT(ERR_FORCE_PARAM_INVALID)
+                ENDIF
+            ELSEIF cmd_id = CMD_MOVE_PTABS THEN
                 nominal_pos(0, TABLE(ctrl_index+1), TABLE(ctrl_index+2), TABLE(ctrl_index+3), TABLE(ctrl_index+4), TABLE(ctrl_index+5))
                 has_target = 1
             ELSEIF cmd_id = CMD_MOVE_PT THEN
                 nominal_pos(0, nominal_pos(0)+TABLE(ctrl_index+1), nominal_pos(1)+TABLE(ctrl_index+2), nominal_pos(2)+TABLE(ctrl_index+3), nominal_pos(3)+TABLE(ctrl_index+4), nominal_pos(4)+TABLE(ctrl_index+5))
                 has_target = 1
-            ELSEIF cmd_id = CMD_FORCE_CFG THEN
-                ' 可简化==========================================================================================
-                new_mode = TABLE(ctrl_index+1)
-                target_step = TABLE(ctrl_index+2)
-                max_step = TABLE(ctrl_index+5)
-                IF (new_mode = FORCE_MODE_SEARCH OR new_mode = FORCE_MODE_HOLD) AND target_step >= 0 AND TABLE(ctrl_index+4) > 0 AND max_step > 0 THEN
-                    IF new_mode = FORCE_MODE_SEARCH AND TABLE(ctrl_index+3) <= 0 THEN
-                        CTRL_ABORT(ERR_FORCE_PARAM_INVALID)
-                    ELSE
-                        force_cfg_mode = new_mode
-                        force_state = new_mode
-                        force_target_cmd = target_step
-                        force_contact_threshold = TABLE(ctrl_index+3)
-                        force_ramp_rate = TABLE(ctrl_index+4)
-                        force_adjust_limit = max_step
-                        ' IF force_adjust_limit > TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_MAX_ADJUST) THEN
-                        '     force_adjust_limit = TABLE(TABLE_FORCE_CFG_BEGIN + FORCE_CFG_MAX_ADJUST)
-                        ' ENDIF
-                        force_contact_count = 0
-                        force_prev_error = 0
-                        IF new_mode = FORCE_MODE_SEARCH THEN
-                            force_target_effective = 0
-                        ENDIF
-                    ENDIF
-                ELSE
-                    CTRL_ABORT(ERR_FORCE_PARAM_INVALID)
-                ENDIF
             ELSEIF cmd_id = CMD_FORCE_OFF THEN
+                cfunc_ctrl_clear()
+                adj_pos(0, 0, 0, 0, 0, 0)
                 force_active = 0
                 has_target = 0
                 exec_state = EXEC_WAIT_FORCE_IDLE
@@ -528,9 +465,5 @@ GLOBAL SUB CTRL_TRACE_STEP()
         ENDIF
     ENDIF
 
-    ' 无新点时仍按最新力误差输出保持点；FORCE_OFF 后不再发送零修正 PT
-    ' 能否简化？==========================================================================================
-    IF ctrl_running = 1 AND exec_state = EXEC_FORCE AND force_active = 1 AND has_target = 1 THEN
-        MOVE_PTABS(1, nominal_pos(0)+adj_pos(0), nominal_pos(1)+adj_pos(1), nominal_pos(2)+adj_pos(2), nominal_pos(3)+adj_pos(3), nominal_pos(4)+adj_pos(4))
-    ENDIF
+    ' 保持点/新点下发已并入上方 force_active 块（has_target 判断后统一 MOVE_PTABS）
 END SUB

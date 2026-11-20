@@ -16,9 +16,9 @@ Result ToolService::stopRevolution()
     return toolProtocol_.stopRevolution();
 }
 
-Result ToolService::startRotation(float rpm, int currentMa)
+Result ToolService::startRotation(float rpm)
 {
-    return toolProtocol_.startRotation(rpm, currentMa);
+    return toolProtocol_.startRotation(rpm);
 }
 
 Result ToolService::stopRotation()

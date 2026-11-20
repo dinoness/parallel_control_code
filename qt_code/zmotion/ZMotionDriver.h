@@ -31,6 +31,7 @@ public:
     Result trigger();
     Result rapidStop(int mode = 2);
     Result setTable(int start, int count, const float* data);
+    Result writeFlash(uint16 flashId, int count, const float* data);
 
     /// @brief 批量读取 TABLE，用于传感器数据上传等
     Result getTable(int start, int count, QVector<float>& data);

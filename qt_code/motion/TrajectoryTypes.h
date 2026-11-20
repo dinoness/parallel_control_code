@@ -18,18 +18,18 @@ struct TrajectoryPoint {
         : cmd(0), x(0), y(0), z(0), theta(0), phi(0), ticks(0) {}
 
     // CTRL 力控段配置。mode 取 kForceModeSearch / kForceModeHold；
-    // 普通坐标字段在此记录中按协议复用为力控参数。
+    // 普通坐标字段在此记录中按协议复用为力控参数，rampStepN 单位为 N/控制周期。
     static TrajectoryPoint forceConfig(int mode,
                                        float targetForceN,
                                        float contactThresholdN,
-                                       float rampRateNPerSec,
+                                       float rampStepN,
                                        float maxAdjustUm) {
         TrajectoryPoint p;
         p.cmd = kCmdForceCfg;
         p.x = static_cast<float>(mode);
         p.y = targetForceN;
         p.z = contactThresholdN;
-        p.theta = rampRateNPerSec;
+        p.theta = rampStepN;
         p.phi = maxAdjustUm;
         return p;
     }

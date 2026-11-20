@@ -42,6 +42,9 @@ public:
     Result readForceStreamBatch(quint64& lastFrameCounter,
                                 ForceStreamBatch& batch);
 
+    /// @brief 保存工具重力标定原始码到 TABLE 和 FLASH
+    Result saveGToolCalibration(float gToolRaw);
+
     /// @brief 将系统状态值转换为可读字符串
     static QString systemStateToText(uint16_t state);
 

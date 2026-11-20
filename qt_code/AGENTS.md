@@ -14,7 +14,7 @@
 - **运行时依赖**: zaux.dll、zmotion.dll（位于 third_party/zaux/）
 
 ## 构建与运行命令
-
+项目构建参考BUILD.md
 ```bash
 # 生成 Makefile 并编译（Debug）
 qmake 1202.pro -spec win32-g++ "CONFIG+=debug"
@@ -129,10 +129,15 @@ mingw32-make clean
 |------|------------|------------|------|
 | 关节指令 | 300–334 | 80–89 | Direct Joint，5 条环形缓冲 |
 | 笛卡尔点动 | 350–384 | 70–79 | Cart Jog，5 条环形缓冲 |
-| 力控配置 | 400–419 | — | 传感器适配、标定滤波、PI 与安全限幅 |
+| 末端工具转速 | 400–401 | — | 公转、自转目标转速 |
+| 力控配置 | 410–426 | — | 传感器适配、显示标定与安全限幅 |
+| 水平标定 | 427 | — | g_tool，水平放置时的 Fz 原始码 |
+| 力控调整量 | 428–432 | — | C 写入的 p_adj[0..4] |
+| 力控位姿输入 | 433–437 | — | BASIC 写入的 pose[0..4] |
 | 轨迹指令 | 1000–7999 | 50–69 | Trace，10 组 × 100 条 = 1000 条缓冲 |
 | 传感器数据 | 8000+ | 120–122 | 独立传感器 TABLE 环形缓冲（预留） |
-| 状态监控区 | 21000–29449 | — | 机器人状态（header 2 float + 384 帧 × 22 通道） |
+| 状态监控区 | 21000–29449 | — | 机器人状态（header 2 float + 384 帧 × 16 通道，实际占用 21000–27145，力信号不进本区） |
+| 高频 Fz 区 | 29450–31499 | — | 1kHz 单通道 Fz 原始码（header 2 float + 2048 帧，C 侧写入，Qt 每 50ms 批量读取） |
 | 系统状态 | — | 5 | 系统状态寄存器 (kRegSystemState) |
 | 运动模式 | — | 6 | 运动模式寄存器 (kRegMotionMode) |
 | 事件 Level 0 | — | 90 | 最高优先级（Estop、ErrorReset） |
@@ -192,7 +197,7 @@ kSysError (18)   kSysEstop (19)
 2. 下发链路与 Trace 完全相同（同一 TABLE 缓冲区 1000–7999、状态寄存器 50–69、TrajectoryService + TrajectorySendWorker 线程管理），仅启动事件不同
 3. `TraceProtocol::sendTrajectory()` 自动在文件记录后附加 CMD_NONE；.dat 文件只保存运动/段控制记录，不需要手工添加结束标记
 4. 控制器 `CTRL_TRACE_STEP()` 是整条混合轨迹的唯一消费者：普通段执行 MOVE/MOVEABS/PT/PTABS/DELAY，FORCE_CFG 后进入力控段，FORCE_OFF 后恢复普通段
-5. FORCE_CFG 记录为 `[30, mode, target_N, contact_N, ramp_N_s, max_adjust_um, reserved]`；可用 `TrajectoryPoint::forceConfig()` 构造，`forceOff()` 构造退出记录
+5. FORCE_CFG 记录为 `[30, mode, target_N, contact_N, ramp_step_N, max_adjust_um, reserved]`，其中 `ramp_step_N` 单位为 N/控制周期；可用 `TrajectoryPoint::forceConfig()` 构造，`forceOff()` 构造退出记录
 6. 力控段只接受 PT/PTABS、FORCE_CFG、FORCE_OFF，CMD_NONE 前必须 FORCE_OFF；模式进入/退出校验与 Trace 共用，暂停/恢复同时暂停控制器运动缓冲
 
 ## 控制器信息监控模块
@@ -223,18 +228,18 @@ ZMotionDriver (getTable / readModbusReg / readModbusRegs)
 
 ### 状态数据监控
 
-控制器每 10 个伺服周期（1kHz 总线 → 100Hz）在一个周期内用一条 TABLE 指令批量采集一帧 22 通道状态数据并写入 TABLE[21000+] 环形缓冲：TABLE[21000..21001] 为 header（frame_counter 单调递增，0 表示总线初始化未完成、尚未采样），TABLE[21002+] 为帧区（384 帧 × 22 通道，帧号 f 的环形位置 = (f-1) % 384，100Hz 下覆盖 3.84s，最后使用 TABLE[29449]）。帧内通道：[0-4] dL 支链伸缩量(um)、[5-9] 电机扭矩(‰)、[10-14] 末端位姿 x,y,z(um),phi,theta(角秒)、[15] ee_valid、[16-21] 六轴力/力矩原始值。编码器及力控派生状态不上传，Qt 中编码器示数固定为 0。
+控制器每 10 个伺服周期（1kHz 总线 → 100Hz）在一个周期内用一条 TABLE 指令批量采集一帧 16 通道状态数据并写入 TABLE[21000+] 环形缓冲：TABLE[21000..21001] 为 header（frame_counter 单调递增，0 表示总线初始化未完成、尚未采样），TABLE[21002+] 为帧区（384 帧 × 16 通道，帧号 f 的环形位置 = (f-1) % 384，100Hz 下覆盖 3.84s，实际占用至 TABLE[27145]）。帧内通道：[0-4] dL 支链伸缩量(um)、[5-9] 电机扭矩(‰)、[10-14] 末端位姿 x,y,z(um),phi,theta(角秒)、[15] ee_valid。力信号不进入本区（只走 29450+ 的 1kHz 环形区），编码器及力控派生状态不上传，Qt 中编码器示数固定为 0。
 
 1. 连接成功后自动启动（`ControllerInfoService::startStatusMonitor()`），周期 100 ms（`kStatusUploadIntervalMs`）
 2. Worker 通过 `statusTimer_` 触发 `pollStatusOnce()` → Protocol 的 `readStatusBatch()` 按帧号增量批量读取（首次只取最新一帧；环形区被覆盖时置 `overflow` 并统计 `droppedFrames`）
-3. `StatusSampleFrame` 提供 dL、扭矩、末端位姿和六轴力原始值；现有 UI 显示最新一帧的 dL、扭矩和末端位姿，编码器标签固定显示 0
+3. `StatusSampleFrame` 提供 dL、扭矩和末端位姿；现有 UI 显示最新一帧的 dL、扭矩和末端位姿，编码器标签固定显示 0
 4. 断开连接时 20 个 label 全部复位为 `-`
 
 ### 数据保存与高频 Fz
 
-- `cbox_data_save_mode` 默认 `All channels`：沿用 100Hz 全通道 CSV 格式。
-- `High-fre Force`：控制器在 TABLE[29450..31499] 提供 1kHz 单通道 Fz 环形区（header 2 + 2048帧），`startForceStreamMonitor()` 在连接后启动，Qt 每 50ms 批量读取。
-- 高频 CSV 格式为 `frame_counter,time_ms,fz_raw,fz_N`，time_ms 从本文件首帧起按 1ms 递增；UI 仍使用原状态帧刷新，不要求 1kHz 刷新。
+- `cbox_data_save_mode` 默认 `All channels`：100Hz 状态帧 CSV（`frame_counter,time_ms,dL*,torque*,ee*,ee_valid`），不含力信号列；力数据用 `High-fre Force` 录制。
+- `High-fre Force`：控制器 C 侧在 TABLE[29450..31499] 提供 1kHz 单通道 Fz 环形区（header 2 + 2048帧），`startForceStreamMonitor()` 在连接后启动，Qt 每 50ms 批量读取。
+- 高频 CSV 格式为 `frame_counter,time_ms,fz_raw,fz_N`，time_ms 从本文件首帧起按 1ms 递增；`label_ee_fz` 的力显示改用每批接收的第一帧（约 20Hz 刷新），不要求 1kHz 刷新。
 - 高频录制期间锁定模式下拉框；检测到环形区覆盖时停止录制并提示文件不适用于连续 FFT。
 - `data/sensor_fft.m` 根据 time_ms 自动识别 100Hz/1kHz，并检查帧号与时间间隔连续性。
 

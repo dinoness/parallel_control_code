@@ -54,9 +54,10 @@ struct SensorTableBatch
 
 /// @brief 单帧机器人状态数据（控制器以 100Hz 写入 TABLE[21002+] 环形缓冲）
 ///
-/// 帧内 22 通道：[0-4] dL支链伸缩量(um) [5-9] 电机扭矩(‰)
+/// 帧内 16 通道：[0-4] dL支链伸缩量(um) [5-9] 电机扭矩(‰)
 /// [10-14] 末端位姿 x,y,z(um),phi,theta(角秒) [15] ee_valid
-/// [16-21] 六轴力/力矩原始值；编码器和力控派生状态不上传
+/// 力信号不进入本帧，只走 29450+ 的 1kHz 环形区（ForceStreamFrame）；
+/// 编码器和力控派生状态不上传
 struct StatusSampleFrame
 {
     quint64 frameCounter = 0;
@@ -64,8 +65,6 @@ struct StatusSampleFrame
     float dL[5] = {0};        // 支链伸缩量 um
     float torque[5] = {0};    // 电机扭矩 千分比
     float ee[5] = {0};        // 末端位姿 x,y,z(um), phi,theta(角秒)
-    float forceRaw[6] = {0};  // Fx,Fy,Fz,Mx,My,Mz 原始值
-    float fzNewton = 0.0f;    // Qt 按 TABLE(409/410) 换算的 Fz，单位 N
     QDateTime hostTimestamp;
 };
 

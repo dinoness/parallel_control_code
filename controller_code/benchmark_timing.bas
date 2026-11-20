@@ -1,5 +1,5 @@
 ' 临时基准测试：不执行运动，不修改控制参数
-' TABLE 900-959 为预留测试地址（452-999 预留区内）
+' TABLE 900-959 为预留测试地址（437-999 预留区内）
 ' 所有测试循环均包含与空循环相同的两次赋值，使用 t_empty 扣除公共开销
 
 GLOBAL SUB BENCHMARK()
@@ -334,10 +334,8 @@ END SUB
 
 ' ================================================================
 ' 力控热路径专项基准：RUNTASK 10, BENCHMARK_FORCE()
-' 1. PTABS 消费方式：FOR 循环逐条 TABLE 读 vs 一条批量数组赋值
-' 2. cfunc_impendance 调用 vs 等价 BASIC 内联计算
-' 注意：cfunc_impendance 由 STATUS_INIT 的 DEFINE_CFUNC 注册，
-'       必须在 main.bas 启动流程运行过之后才能执行本测试
+' 比较FOR循环逐条TABLE读与一条批量数组赋值；阻抗算法已改为C内部函数，
+' 不再通过独立CFUNC暴露，因此本测试不直接调用阻抗入口。
 ' ================================================================
 GLOBAL SUB BENCHMARK_FORCE()
     DIM bench_b(8)
@@ -380,26 +378,6 @@ GLOBAL SUB BENCHMARK_FORCE()
     NEXT
     t_test = TIME_TICKUS
     PRINT "批量赋值5次TABLE读每次(us): ", (t_test - t_empty) / n
-
-    ' 2.1 cfunc_impendance C 函数调用（含参数传递与返回）
-    TIME_TICKUS = 0
-    FOR i = 0 TO n - 1
-        bench_value = i
-        bench_addr = i MOD 16
-        bench_value = cfunc_impendance(bench_value, 10.0)
-    NEXT
-    t_test = TIME_TICKUS
-    PRINT "cfunc_impendance调用每次(us): ", (t_test - t_empty) / n
-
-    ' 2.2 等价 BASIC 内联计算（一次误差、比例、限幅量级相当的算术组合）
-    TIME_TICKUS = 0
-    FOR i = 0 TO n - 1
-        bench_value = i
-        bench_addr = i MOD 16
-        bench_value = 0.5 * (10.0 - bench_value) + 0.1 * (10.0 - bench_value) * 0.001
-    NEXT
-    t_test = TIME_TICKUS
-    PRINT "BASIC内联等价计算每次(us): ", (t_test - t_empty) / n
 
     PRINT "力控热路径基准测试完成"
     PRINT "=================================="

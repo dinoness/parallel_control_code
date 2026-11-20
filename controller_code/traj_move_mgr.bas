@@ -2,7 +2,7 @@
 ' traj_move_mgr.bas - 轨迹运动执行
 ' 数据协议（见 command_map.md / register_assignment.md）：
 '   TABLE 1000 起，10 个指令组，每组 100 条指令，每条 7 个数：
-'     cmd_id, x, y, z, theta, phi, ticks/blank
+'     cmd_id, x, y, z, phi, theta, ticks/blank
 '   cmd_id: 1=MOVE 相对直线, 2=MOVEABS 绝对直线,
 '           10=MOVE_PTABS 单位时间绝对(ticks为第7字段),
 '           20=MOVE_DELAY 缓冲延时(第7字段为延时毫秒数ms),
